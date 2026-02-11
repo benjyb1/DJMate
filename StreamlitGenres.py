@@ -61,7 +61,7 @@ def get_embedding(track):
     emb = track["embedding"]
     if isinstance(emb, str):
         emb = json.loads(emb)
-    return np.array(emb, dtype=np.float32)
+    return np.array(emb, dtype=np.float32) 
 
 def compute_mean_centroid(track_map, label_map, tag):
     track_ids = label_map.get(tag, [])
