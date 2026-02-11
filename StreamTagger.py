@@ -19,7 +19,7 @@ load_dotenv()  # loads variables from .env
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)==========
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ML "Brain" Functions
 # ======================
 

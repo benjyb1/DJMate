@@ -7,6 +7,7 @@ import os
 from supabase import create_client
 
 load_dotenv()  # loads variables from .env
+load_dotenv()  # loads variables from .env
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")

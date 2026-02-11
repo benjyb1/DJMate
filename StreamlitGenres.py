@@ -1,7 +1,9 @@
 import os
 import numpy as np
 import streamlit as st
-
+from dotenv import load_dotenv
+import os
+from supabase import create_client
 from supabase import create_client
 from sklearn.metrics.pairwise import cosine_similarity
 import json
@@ -25,9 +27,7 @@ def find_file_recursively(root_dir, target_filename):
             return os.path.join(root, target_filename)
     return None
 
-from dotenv import load_dotenv
-import os
-from supabase import create_client
+
 
 load_dotenv()  # loads variables from .env
 
