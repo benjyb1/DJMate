@@ -1,9 +1,3 @@
-This is an excellent architectural evolution that transforms your system from a passive visualization into an intelligent DJ co-pilot. Let me provide a detailed technical implementation plan for each component:
-
-Backend Implementation Strategy
-
-1. Enhanced main.py - The Intelligent Gateway
-
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -123,53 +117,3 @@ async def get_pathway_visualization(from_track: str, to_tracks: List[str]):
         return pathway_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Pathway generation failed: {str(e)}")
-
-2. llm_interpreter.py - The Semantic Brain
-
-import openai
-import json
-from typing import Dict, Any, List, Optional
-from pydantic import BaseModel
-import asyncio
-from dataclasses import dataclass
-
-@dataclass
-class InterpretationContext:
-    current_track: Optional[Dict[str, Any]] = None
-    recent_tracks: List[Dict[str, Any]] = None
-    session_metadata: Optional[Dict[str, Any]] = None
-    user_preferences: Optional[Dict[str, Any]] = None
-
-class SemanticInterpreter:
-    def __init__(self, model="gpt-4o-mini"):
-        self.model = model
-        self.client = openai.AsyncOpenAI()
-
-        # DJ-specific semantic mapping
-        self.semantic_schema = {
-            "energy_descriptors": {
-                "chill": (0.1, 0.3), "laid_back": (0.2, 0.4), "groovy": (0.4, 0.6),
-                "driving": (0.6, 0.8), "intense": (0.7, 0.9), "banging": (0.8, 1.0)
-            },
-            "directional_terms": {
-                "build": "increase_energy", "drop": "decrease_energy",
-                "maintain": "stable_energy", "bridge": "transitional"
-            },
-            "vibe_mappings": {
-                "dark": ["dark", "moody", "underground"],
-                "uplifting": ["uplifting", "euphoric", "positive"],
-                "hypnotic": ["hypnotic", "repetitive", "trance-like"]
-            }
-        }
-
-    async def interpret(self, natural_query: str, context: Optional[InterpretationContext] = None) -> Dict[str, Any]:
-        """Convert natural language DJ request to structured parameters"""
-
-        system_prompt = self._build_system_prompt(context)
-        user_prompt = self._build_user_prompt(natural_query, context)
-
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system

@@ -1,123 +1,152 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { createClient } from '@supabase/supabase-js';
-import ForceGraph3D from 'react-force-graph-3d';
-import * as THREE from 'three';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Canvas } from '@react-three/fiber';
+import { Suspense } from 'react';
 
-// --- CONFIGURATION ---
-const supabase = createClient(
-  "https://cvermotfxamubejfnoje.supabase.co", 
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2ZXJtb3RmeGFtdWJlamZub2plIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk2NTU4MTcsImV4cCI6MjA3NTIzMTgxN30.clXSFQ4QVhL8nUK_6shyhDVxhKaHUtnrdyqCnDeCCag" 
-);
+import MusicCloud3D from './components/MusicCloud3D';
+import CrateInspector from './components/CrateInspector';
+import NaturalLanguageBar from './components/NaturalLanguageBar';
+import PathwayVisualizer from './components/PathwayVisualizer';
+import CompatibilityIndicator from './components/CompatibilityIndicator';
 
-const DEFAULT_COVER = "https://placehold.co/400x400/000000/00ffff?text=No+Cover";
+import { useRecommendationAPI } from './hooks/useRecommendationAPI';
+import { useCrateManager } from './hooks/useCrateManager';
 
-export default function App() {
-  const fgRef = useRef();
-  const [trackData, setTrackData] = useState({ nodes: [], links: [] });
+function App() {
+  // Core state management
+  const [musicLibrary, setMusicLibrary] = useState([]);
+  const [activeTrack, setActiveTrack] = useState(null);
+  const [highlightedTracks, setHighlightedTracks] = useState([]);
+  const [pathwayData, setPathwayData] = useState(null);
+  const [queryState, setQueryState] = useState({
+    isLoading: false,
+    lastQuery: '',
+    interpretation: null
+  });
 
-  // --- 1. FETCH DATA ---
-  useEffect(() => {
-    const getData = async () => {
-      const { data, error } = await supabase.from('tracks').select('*');
-      if (error) return console.error("Supabase error:", error);
+  // Custom hooks for API management
+  const recommendationAPI = useRecommendationAPI();
+  const crateManager = useCrateManager();
 
-      if (data && data.length > 0) {
-        const artistMap = {};
-        data.forEach(track => {
-          const artist = track.artist || "Unknown";
-          if (!artistMap[artist]) artistMap[artist] = [];
-          artistMap[artist].push(track);
-        });
+  // Handle natural language queries
+  const handleNaturalLanguageQuery = useCallback(async (queryText) => {
+    setQueryState(prev => ({ ...prev, isLoading: true, lastQuery: queryText }));
+    
+    try {
+      // Step 1: Parse intent
+      const interpretation = await recommendationAPI.parseIntent({
+        query: queryText,
+        context: activeTrack ? { current_track: activeTrack } : null,
+        session_id: crateManager.sessionId
+      });
 
-        const nodes = data.map(track => ({
-          id: track.trackid,
-          name: track.title || "Unknown Title",
-          artist: track.artist || "Unknown Artist",
-          albumArt: track.album_art_url || DEFAULT_COVER,
-          x: track.x_coord || (Math.random() - 0.5) * 1000,
-          y: track.y_coord || (Math.random() - 0.5) * 1000,
-          z: track.z_coord || (Math.random() - 0.5) * 1000,
-        }));
+      // Step 2: Get recommendations
+      const recommendations = await recommendationAPI.getIntelligentRecommendations({
+        structured_query: interpretation.structured_query,
+        context_track_id: activeTrack?.id
+      });
 
-        const links = [];
-        Object.values(artistMap).forEach(tracks => {
-          for (let i = 0; i < tracks.length - 1; i++) {
-            links.push({
-              source: tracks[i].trackid,
-              target: tracks[i + 1].trackid,
-            });
-          }
-        });
+      // Step 3: Update visualization
+      setHighlightedTracks(recommendations.recommendations.map(r => r.track.id));
+      setPathwayData(recommendations.pathway_data);
+      setQueryState(prev => ({ 
+        ...prev, 
+        isLoading: false, 
+        interpretation: interpretation 
+      }));
 
-        setTrackData({ nodes, links });
-      }
-    };
-    getData();
-  }, []);
+      // Step 4: Provide visual feedback
+      showQueryResults(recommendations);
 
-  // --- 2. NODE SPRITE ---
-  const nodeThreeObject = useCallback((node) => {
-    const textureLoader = new THREE.TextureLoader();
-    const texture = textureLoader.load(node.albumArt);
-    texture.anisotropy = 16;
+    } catch (error) {
+      console.error('Query processing failed:', error);
+      setQueryState(prev => ({ ...prev, isLoading: false }));
+    }
+  }, [activeTrack, recommendationAPI, crateManager.sessionId]);
 
-    const material = new THREE.SpriteMaterial({
-      map: texture,
-      transparent: true,
-      depthWrite: false,
-      depthTest: false
-    });
+  // Handle track selection from 3D cloud
+  const handleTrackSelection = useCallback(async (trackId) => {
+    const track = musicLibrary.find(t => t.id === trackId);
+    setActiveTrack(track);
+    
+    // Get automatic recommendations for context
+    if (track) {
+      const recommendations = await recommendationAPI.getSimilarTracks(trackId);
+      setHighlightedTracks(recommendations.map(r => r.id));
+    }
+  }, [musicLibrary, recommendationAPI]);
 
-    const sprite = new THREE.Sprite(material);
-    sprite.scale.set(28, 28, 1);
-    return sprite;
-  }, []);
-
-  // --- 3. CAMERA FLY-TO NODE ---
-  const handleNodeClick = (node) => {
-    if (!fgRef.current) return;
-    const distance = 60;
-    const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
-    const targetPos = new THREE.Vector3(node.x * distRatio, node.y * distRatio, node.z * distRatio);
-    fgRef.current.cameraPosition(targetPos.clone().add(new THREE.Vector3(0, 50, 150)), targetPos, 1000);
-  };
+  // Handle crate operations
+  const handleCrateOperation = useCallback(async (operation, trackId) => {
+    switch (operation) {
+      case 'add':
+        await crateManager.addTrack(trackId);
+        break;
+      case 'remove':
+        await crateManager.removeTrack(trackId);
+        break;
+      case 'reorder':
+        await crateManager.reorderTracks(trackId.newOrder);
+        break;
+    }
+  }, [crateManager]);
 
   return (
-    <div style={{ width: '100vw', height: '100vh', background: '#000', margin: 0, padding: 0 }}>
-      <ForceGraph3D
-        ref={fgRef}
-        graphData={trackData}
-        backgroundColor="#000000"
-        nodeThreeObject={nodeThreeObject}
-        linkColor={() => 'rgba(0, 255, 255, 0.2)'}
-        linkWidth={0.5}
-        controlType="trackball"
-        onNodeClick={handleNodeClick}
-        onEngineStop={() => {
-          if (fgRef.current) {
-            fgRef.current.zoomToFit(400, 100);
-            const controls = fgRef.current.controls();
-            if (controls) {
-              controls.maxDistance = 8000;
-              controls.minDistance = 10;
-            }
-          }
-        }}
-        nodeLabel={node => `
-          <div style="
-            color: #00ffff;
-            background: rgba(0,0,0,0.85);
-            padding: 10px;
-            border: 1px solid #00ffff;
-            border-radius: 6px;
-            text-align: center;
-            font-family: 'Inter', sans-serif;
-          ">
-            <strong style="font-size: 14px;">${node.name}</strong><br/>
-            <span style="font-size: 11px; opacity: 0.8;">${node.artist}</span>
-          </div>
-        `}
-      />
+    <div className="app-container">
+      {/* Natural Language Interface */}
+      <div className="top-bar">
+        <NaturalLanguageBar
+          onQuery={handleNaturalLanguageQuery}
+          isLoading={queryState.isLoading}
+          lastInterpretation={queryState.interpretation}
+        />
+      </div>
+
+      <div className="main-content">
+        {/* 3D Visualization */}
+        <div className="visualization-panel">
+          <Canvas camera={{ position: [0, 0, 50], fov: 75 }}>
+            <Suspense fallback={null}>
+              <MusicCloud3D
+                tracks={musicLibrary}
+                activeTrack={activeTrack}
+                highlightedTracks={highlightedTracks}
+                pathwayData={pathwayData}
+                onTrackSelect={handleTrackSelection}
+                onTrackDragToCrate={(trackId) => handleCrateOperation('add', trackId)}
+              />
+              
+              {pathwayData && (
+                <PathwayVisualizer
+                  pathwayData={pathwayData}
+                  activeTrack={activeTrack}
+                />
+              )}
+            </Suspense>
+          </Canvas>
+        </div>
+
+        {/* Crate Inspector Sidebar */}
+        <div className="crate-panel">
+          <CrateInspector
+            crate={crateManager.currentCrate}
+            onTrackRemove={(trackId) => handleCrateOperation('remove', trackId)}
+            onTrackReorder={(newOrder) => handleCrateOperation('reorder', { newOrder })}
+            onSequenceValidation={crateManager.validateSequence}
+            compatibilityData={crateManager.compatibilityData}
+          />
+        </div>
+      </div>
+
+      {/* Status and compatibility indicators */}
+      <div className="status-bar">
+        <CompatibilityIndicator
+          activeTrack={activeTrack}
+          crateSequence={crateManager.currentCrate}
+          validationResults={crateManager.validationResults}
+        />
+      </div>
     </div>
   );
 }
+
+export default App;
