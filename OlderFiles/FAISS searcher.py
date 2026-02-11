@@ -2,11 +2,16 @@ from supabase import create_client
 import numpy as np
 import faiss
 
-# --- Supabase setup ---
-SUPABASE_URL = 'https://cvermotfxamubejfnoje.supabase.co'
-SUPABASE_KEY = 'sb_secret_1U7o2RsVAD2_5eTdBQaxkw_adLbxVBe'
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+from dotenv import load_dotenv
+import os
+from supabase import create_client
 
+load_dotenv()  # loads variables from .env
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 import numpy as np
 import faiss
 import re

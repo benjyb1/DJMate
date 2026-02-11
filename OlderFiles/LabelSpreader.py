@@ -12,9 +12,16 @@ from sklearn.preprocessing import normalize
 
 # ------------------ Configuration ------------------
 MUSIC_LIBRARY_ROOT = "/Users/benjyb/Desktop/Mixing"
-SUPABASE_URL = 'https://cvermotfxamubejfnoje.supabase.co'
-SUPABASE_KEY = 'sb_secret_1U7o2RsVAD2_5eTdBQaxkw_adLbxVBe' # Be careful exposing secrets in code!
+from dotenv import load_dotenv
+import os
+from supabase import create_client
 
+load_dotenv()  # loads variables from .env
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 if "pending_votes" not in st.session_state:
     st.session_state.pending_votes = {}
 

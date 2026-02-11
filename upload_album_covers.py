@@ -8,16 +8,22 @@ from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
 from mutagen.mp4 import MP4
 
-# ==================== CONFIGURATION ====================
-SUPABASE_URL = "https://cvermotfxamubejfnoje.supabase.co"
-SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY"
+from dotenv import load_dotenv
+import os
+from supabase import create_client
+
+load_dotenv()  # loads variables from .env
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 BUCKET_NAME = "album-covers"
 MUSIC_FOLDER = Path.home() / "Desktop" / "Mixing"
 AUDIO_EXTENSIONS = {'.mp3', '.flac', '.m4a', '.mp4', '.ogg', '.wma'}
 PROGRESS_FILE = "upload_progress_tracks.json"
 
-# ==================== SETUP ====================
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ==================== SETUP ===================
 
 # ==================== UTILITIES ====================
 

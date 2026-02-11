@@ -10,12 +10,16 @@ from sklearn.metrics.pairwise import cosine_similarity
 # Supabase setup
 # ======================
 
-# It's best practice to use st.secrets for these!
-SUPABASE_URL = "https://cvermotfxamubejfnoje.supabase.co"
-SUPABASE_KEY = "sb_secret_1U7o2RsVAD2_5eTdBQaxkw_adLbxVBe"
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+from dotenv import load_dotenv
+import os
+from supabase import create_client
 
-# ======================
+load_dotenv()  # loads variables from .env
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)==========
 # ML "Brain" Functions
 # ======================
 

@@ -29,12 +29,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ------------------ Supabase setup ------------------
-SUPABASE_URL = 'https://cvermotfxamubejfnoje.supabase.co'
-SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2ZXJtb3RmeGFtdWJlamZub2plIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk2NTU4MTcsImV4cCI6MjA3NTIzMTgxN30.clXSFQ4QVhL8nUK_6shyhDVxhKaHUtnrdyqCnDeCCag'
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+from dotenv import load_dotenv
+import os
+from supabase import create_client
 
+load_dotenv()  # loads variables from .env
 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ------------------ Tag Reading (Title/Artist) ------------------
 
 def read_tags(filepath: str):
