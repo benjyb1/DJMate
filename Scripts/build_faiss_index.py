@@ -3,17 +3,17 @@ import faiss
 import numpy as np
 import asyncio
 import pickle
-from src.data.db_interface import db_manager
+from Backend.data.db_interface import DatabaseManager
 
 async def build_faiss_index():
     """Build FAISS index from database embeddings"""
     print("🔨 Building FAISS index...")
 
     # Initialize database
-    await db_manager.initialize()
+    await DatabaseManager.initialize()
 
     # Get all tracks with embeddings
-    async with db_manager.pool.acquire() as conn:
+    async with DatabaseManager.pool.acquire() as conn:
         rows = await conn.fetch("SELECT trackid, embedding FROM tracks WHERE embedding IS NOT NULL")
 
     if not rows:

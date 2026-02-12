@@ -40,12 +40,19 @@ class CrateOperation(BaseModel):
     sequence_order: List[int]
     metadata: Optional[Dict[str, Any]] = None
 
-# Initialize core components
-db_manager = DatabaseManager()  # Supabase-based database manager
-embedding_index = None  # Placeholder for embedding index (to be implemented)
-semantic_interpreter = SemanticInterpreter()
-recommendation_engine = DJRecommendationEngine(db_manager=db_manager, embedding_index=embedding_index)
+db_manager = DatabaseManager()
 
+# Since we are using Supabase pgvector directly,
+# we don't need a separate FAISS index.
+embedding_index = None
+
+semantic_interpreter = SemanticInterpreter()
+
+# The recommendation engine now relies on db_manager for vector searches
+recommendation_engine = DJRecommendationEngine(
+    db_manager=db_manager,
+    embedding_index=None
+)
 @app.get("/")
 async def root():
     """Health check endpoint"""
