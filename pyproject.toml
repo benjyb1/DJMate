@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "djmate"
+version = "2.0.0"
+description = "AI DJ Curation API with intelligent track recommendation"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0.0",
+    "python-multipart>=0.0.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.25.0",  # For FastAPI testing
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[tool.setuptools]
+packages = ["Backend", "Backend.data"]
+
+[tool.setuptools.package-data]
+Backend = ["*.py"]
+"Backend.data" = ["*.py"]
+
+[tool.black]
+line-length = 100
+target-version = ['py39', 'py310', 'py311']
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"

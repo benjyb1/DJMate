@@ -4,11 +4,20 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import asyncio
 
-from llm_interpreter import SemanticInterpreter
-from recommender import DJRecommendationEngine
-from data.db_interface import DatabaseManager
+from Backend.llm_interpreter import SemanticInterpreter
+from Backend.recommender import DJRecommendationEngine
+from Backend.data.db_interface import DatabaseManager
 
 app = FastAPI(title="AI DJ Curation API", version="2.0.0")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify actual origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Enhanced request models
 class NaturalLanguageQuery(BaseModel):
@@ -32,9 +41,19 @@ class CrateOperation(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 # Initialize core components
+db_manager = DatabaseManager()  # Supabase-based database manager
+embedding_index = None  # Placeholder for embedding index (to be implemented)
 semantic_interpreter = SemanticInterpreter()
-recommendation_engine = DJRecommendationEngine()
-db_manager = DatabaseManager()
+recommendation_engine = DJRecommendationEngine(db_manager=db_manager, embedding_index=embedding_index)
+
+@app.get("/")
+async def root():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "service": "AI DJ Curation API",
+        "version": "2.0.0"
+    }
 
 @app.post("/parse-intent")
 async def parse_natural_language(query: NaturalLanguageQuery):
@@ -117,3 +136,7 @@ async def get_pathway_visualization(from_track: str, to_tracks: List[str]):
         return pathway_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Pathway generation failed: {str(e)}")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
