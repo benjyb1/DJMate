@@ -9,19 +9,55 @@
     "lint": "eslint .",
     "preview": "vite preview"
   },
+  "overrides": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
   "dependencies": {
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "@hookform/resolvers": "^3.10.0",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-slider": "^1.3.6",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
+    "@types/chroma-js": "^2.4.5",
+    "@types/lodash-es": "^4.17.12",
+    "@wavesurfer/react": "^1.0.12",
+    "axios": "^1.13.5",
+    "chroma-js": "^2.6.0",
+    "date-fns": "^2.30.0",
+    "konva": "^9.3.22",
+    "leva": "^0.9.36",
+    "lodash-es": "^4.17.23",
+    "lucide-react": "^0.563.0",
+    "ml-matrix": "^6.12.1",
+    "react": "^18.3.1",
+    "react-beautiful-dnd": "^13.1.1",
+    "react-dom": "^18.3.1",
+    "react-error-boundary": "^4.1.2",
+    "react-hook-form": "^7.71.1",
+    "react-konva": "^18.2.14",
+    "socket.io-client": "^4.8.3",
+    "three": "^0.158.0",
+    "tone": "^14.9.17",
+    "umap-js": "^1.4.0",
+    "wavesurfer.js": "^7.12.1",
+    "web-vitals": "^3.5.2",
+    "zod": "^3.25.76",
+    "zustand": "^4.5.7"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/react": "^19.2.7",
+    "@types/react-beautiful-dnd": "^13.1.8",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.1.1",
+    "@vitejs/plugin-react": "^5.1.4",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
+    "install": "^0.13.0",
     "vite": "^7.3.1"
   }
 }
