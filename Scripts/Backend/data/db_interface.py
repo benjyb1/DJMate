@@ -392,23 +392,26 @@ class DatabaseManager:
 
             # Post-process filtering
             results = []
-            tags = set(structured_query.get("tags", []))
-            vibe_descriptors = set(structured_query.get("vibe_descriptors", []))
+            tags = set(structured_query.get("semantic_tags", []) or structured_query.get("tags", []))
+            vibe_descriptors = set(structured_query.get("vibes", []) or structured_query.get("vibe_descriptors", []))
 
             for track in response.data:
                 labels = track.get("track_labels", {})
                 if not labels:
                     continue
+                # Supabase inner joins return labels as a list — unwrap it
+                if isinstance(labels, list):
+                    labels = labels[0] if labels else {}
 
-                # Tag filtering
+                # Tag filtering (semantic_tags may be a JSON string, not a list)
                 if tags:
-                    track_tags = set(labels.get("semantic_tags", []))
+                    track_tags = set(self._parse_json_field(labels.get("semantic_tags")))
                     if not tags.intersection(track_tags):
                         continue
 
-                # Vibe filtering
+                # Vibe filtering (vibe may be a JSON string, not a list)
                 if vibe_descriptors:
-                    track_vibes = set(labels.get("vibe", []))
+                    track_vibes = set(self._parse_json_field(labels.get("vibe")))
                     if not vibe_descriptors.intersection(track_vibes):
                         continue
 
@@ -525,11 +528,31 @@ class DatabaseManager:
 
         return min(score, 1.0)  # Cap at 1.0
 
+    @staticmethod
+    def _parse_json_field(value) -> list:
+        """Parse a field that may be a JSON-encoded string or already a list."""
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    return parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
+            if value.strip():
+                return [value.strip()]
+        return []
+
     def _structure_track_data(self, raw_data: Dict[str, Any]) -> Dict[str, Any]:
         """Structure raw database response into TrackMetadata format."""
         labels = raw_data.get("track_labels", {})
         if isinstance(labels, list) and labels:
             labels = labels[0]  # Take first label if multiple
+        if not isinstance(labels, dict):
+            labels = {}
 
         return {
             "trackid": raw_data["trackid"],
@@ -541,9 +564,9 @@ class DatabaseManager:
             "key": raw_data.get("key"),
             "duration": raw_data.get("duration"),
             "embedding": raw_data.get("embedding"),
-            "semantic_tags": labels.get("semantic_tags", []),
+            "semantic_tags": self._parse_json_field(labels.get("semantic_tags")),
             "energy": labels.get("energy"),
-            "vibe_descriptors": labels.get("vibe", [])
+            "vibe_descriptors": self._parse_json_field(labels.get("vibe")),
         }
 
     async def _fallback_similarity_search(

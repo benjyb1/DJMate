@@ -1,9 +1,6 @@
 """
 DJMate — Similar Tracks Explorer
-Run: streamlit run similar_tracks_tool.py
-
-Pick a track (with autocomplete from your DB), get 7 similar tracks,
-each described in terms of direction: "more tech house", "lower energy", etc.
+Run: streamlit run streamSimilar.py
 """
 
 import streamlit as st
@@ -13,7 +10,6 @@ import sys
 import numpy as np
 from dotenv import load_dotenv
 
-# Walk up from this file until we find the .env (handles any folder depth)
 def _load_env():
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(6):
@@ -30,46 +26,48 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from Backend.data.db_interface import DatabaseManager
 
-# ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="DJMate — Similar Tracks",
-    page_icon="🔀",
-    layout="wide",
-)
+st.set_page_config(page_title="DJMate — Similar Tracks", page_icon="🔀", layout="wide")
 
 st.markdown("""
 <style>
   .result-card {
-    background: #111;
-    border: 1px solid #2a2a2a;
-    border-radius: 10px;
-    padding: 14px 18px;
-    margin-bottom: 10px;
-    position: relative;
+    background: #111; border: 1px solid #2a2a2a;
+    border-radius: 10px; padding: 14px 18px; margin-bottom: 4px;
   }
   .result-card:hover { border-color: #444; }
-  .rank    { font-size: 28px; color: #333; font-weight: bold; line-height: 1; }
-  .title   { font-size: 15px; font-weight: bold; color: #fff; }
-  .artist  { font-size: 12px; color: #aaa; margin-top: 2px; }
-  .meta    { font-size: 11px; color: #666; margin-top: 6px; }
+  .rank   { font-size: 28px; color: #333; font-weight: bold; line-height: 1; }
+  .title  { font-size: 15px; font-weight: bold; color: #fff; }
+  .artist { font-size: 12px; color: #aaa; margin-top: 2px; }
+  .meta   { font-size: 11px; color: #666; margin-top: 6px; }
   .sim-bar { height: 4px; border-radius: 2px; margin-top: 8px; }
   .direction-badge {
-    display: inline-block;
-    padding: 3px 10px; border-radius: 12px;
+    display: inline-block; padding: 3px 10px; border-radius: 12px;
     font-size: 11px; font-weight: 600; margin-top: 6px;
   }
-  .tag { display: inline-block; background: #1a1a3a; color: #6666cc;
-         border-radius: 10px; padding: 2px 7px; font-size: 10px; margin: 2px; }
+  .inferred-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 10px; font-weight: 500; margin-top: 4px;
+    background: #1a1a00; color: #aaaa00; border: 1px solid #444400;
+  }
+  .tag {
+    display: inline-block; background: #1a1a3a; color: #6666cc;
+    border-radius: 10px; padding: 2px 7px; font-size: 10px; margin: 2px;
+  }
+  .relax-notice {
+    background: #1a1100; border: 1px solid #443300; border-radius: 8px;
+    padding: 8px 14px; margin-bottom: 14px; font-size: 12px; color: #cc9900;
+  }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Singleton DB ──────────────────────────────────────────────────────────────
+# ── DB singleton ──────────────────────────────────────────────────────────────
 @st.cache_resource
 def get_db():
     return DatabaseManager()
 
 db = get_db()
 
+# ── Async helper ──────────────────────────────────────────────────────────────
 def run_async(coro):
     try:
         loop = asyncio.get_event_loop()
@@ -81,20 +79,17 @@ def run_async(coro):
     except RuntimeError:
         return asyncio.run(coro)
 
-# ── Load all track names for autocomplete ─────────────────────────────────────
+# ── Track index for autocomplete ──────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_track_index():
-    """Returns list of (display_label, trackid) tuples for the selectbox."""
     if not db.client:
         return []
     try:
         resp = db.client.table("tracks") \
             .select("trackid, title, artist, bpm, key") \
-            .order("artist") \
-            .execute()
-        rows = resp.data or []
+            .order("artist").execute()
         results = []
-        for r in rows:
+        for r in resp.data or []:
             label = f"{r.get('artist','?')} — {r.get('title','?')}"
             if r.get("bpm"):
                 label += f"  ({int(r['bpm'])} BPM)"
@@ -104,70 +99,150 @@ def load_track_index():
         st.error(f"Failed to load track index: {e}")
         return []
 
-# ── Direction analysis ────────────────────────────────────────────────────────
+# ── Direction badge ───────────────────────────────────────────────────────────
 def describe_direction(source, candidate) -> tuple[str, str]:
-    """
-    Compare two tracks and return a plain-English direction description
-    plus a colour for the badge.
+    def _get(obj, key):
+        return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
 
-    Returns: (description, hex_colour)
-    """
     clues = []
+    s_e = float(_get(source,    "energy") or 0.5)
+    c_e = float(_get(candidate, "energy") or 0.5)
+    if c_e - s_e >  0.15: clues.append(("higher energy", "#ff4444"))
+    if c_e - s_e < -0.15: clues.append(("lower energy",  "#4488ff"))
 
-    # Energy direction
-    s_energy = getattr(source,    "energy", None) or 0.5
-    c_energy = getattr(candidate, "energy", None) or 0.5
-    diff_e = c_energy - s_energy
-    if diff_e > 0.15:
-        clues.append(("higher energy", "#ff4444"))
-    elif diff_e < -0.15:
-        clues.append(("lower energy",  "#4488ff"))
+    s_b = _get(source,    "bpm")
+    c_b = _get(candidate, "bpm")
+    if s_b and c_b:
+        diff = float(c_b) - float(s_b)
+        if diff >  5: clues.append((f"+{int(diff)} BPM faster", "#ffaa00"))
+        if diff < -5: clues.append((f"{int(diff)} BPM slower", "#aaaaff"))
 
-    # BPM direction
-    s_bpm = getattr(source,    "bpm", None)
-    c_bpm = getattr(candidate, "bpm", None)
-    if s_bpm and c_bpm:
-        diff_b = c_bpm - s_bpm
-        if diff_b > 5:
-            clues.append((f"+{int(diff_b)} BPM faster", "#ffaa00"))
-        elif diff_b < -5:
-            clues.append((f"{int(diff_b)} BPM slower", "#aaaaff"))
+    def _tags(o):
+        v = o.get("semantic_tags") if isinstance(o, dict) else getattr(o, "semantic_tags", None)
+        return set(v or [])
 
-    # Tag direction (what unique genres does the candidate add?)
-    s_tags = set(getattr(source,    "semantic_tags", None) or [])
-    c_tags = set(getattr(candidate, "semantic_tags", None) or [])
-    new_tags = c_tags - s_tags
-    if new_tags:
-        label = next(iter(new_tags))          # just show the most distinct one
-        clues.append((f"more {label}", "#00ff88"))
+    def _vibes(o):
+        v = (o.get("vibe") or o.get("vibe_descriptors")) if isinstance(o, dict) \
+            else getattr(o, "vibe_descriptors", None)
+        return set(v if isinstance(v, list) else ([v] if v else []))
 
-    # Vibe direction
-    s_vibes = set(getattr(source,    "vibe_descriptors", None) or [])
-    c_vibes = set(getattr(candidate, "vibe_descriptors", None) or [])
-    new_vibes = c_vibes - s_vibes
-    if new_vibes:
-        clues.append((next(iter(new_vibes)), "#cc88ff"))
+    new_tags  = _tags(candidate)  - _tags(source)
+    new_vibes = _vibes(candidate) - _vibes(source)
+    if new_tags:  clues.append((f"more {next(iter(new_tags))}", "#00ff88"))
+    if new_vibes: clues.append((next(iter(new_vibes)), "#cc88ff"))
 
-    if not clues:
-        return ("similar vibe", "#555555")
-
-    # Pick the most "interesting" clue (prefer genre > energy > BPM)
-    for desc, colour in clues:
-        if "more " in desc:
-            return (desc, colour)
+    if not clues: return ("similar vibe", "#555555")
+    for desc, col in clues:
+        if "more " in desc: return (desc, col)
     return clues[0]
 
+# ── Cosine similarity ─────────────────────────────────────────────────────────
 def cosine_similarity(v1, v2) -> float:
     try:
         a, b = np.array(v1, dtype=np.float32), np.array(v2, dtype=np.float32)
         na, nb = np.linalg.norm(a), np.linalg.norm(b)
-        if na == 0 or nb == 0:
-            return 0.0
-        return float(np.dot(a, b) / (na * nb))
+        return float(np.dot(a, b) / (na * nb)) if na and nb else 0.0
     except Exception:
         return 0.0
 
-# ── Main similarity search ────────────────────────────────────────────────────
+
+# =============================================================================
+# ★ _render_results — defined HERE, before any tabs that call it
+#
+#   Audio is in its own st.columns() cell, completely isolated from the HTML
+#   markdown block. This is the exact pattern from Tagger.py that works.
+# =============================================================================
+def _render_results(pairs: list, source=None):
+    for i, (sim_score, track) in enumerate(pairs, 1):
+
+        if isinstance(track, dict):
+            title        = track.get("title")         or "Unknown"
+            artist       = track.get("artist")        or "Unknown"
+            bpm          = track.get("bpm")
+            key          = track.get("key")
+            energy       = track.get("energy")
+            tags_l       = track.get("semantic_tags") or []
+            filepath     = track.get("filepath")
+            inferred     = track.get("_inferred",     False)
+            score_detail = track.get("_score_detail", {})
+        else:
+            title        = getattr(track, "title",         None) or "Unknown"
+            artist       = getattr(track, "artist",        None) or "Unknown"
+            bpm          = getattr(track, "bpm",           None)
+            key          = getattr(track, "key",           None)
+            energy       = getattr(track, "energy",        None)
+            tags_l       = getattr(track, "semantic_tags", None) or []
+            filepath     = getattr(track, "filepath",      None)
+            inferred     = getattr(track, "_inferred",     False)
+            score_detail = getattr(track, "_score_detail", {})
+
+        direction_html = ""
+        if source is not None:
+            direction, dc = describe_direction(source, track)
+            direction_html = (
+                f'<span class="direction-badge" style="background:{dc}22;'
+                f'color:{dc};border:1px solid {dc}66">↗ {direction}</span>'
+            )
+
+        inferred_html = (
+            '<span class="inferred-badge">🔮 inferred — not yet tagged</span>'
+            if inferred else ""
+        )
+
+        bar_pct    = int(sim_score * 100)
+        bar_colour = "#00ff88" if sim_score > 0.7 else "#ffaa00" if sim_score > 0.4 else "#ff4444"
+
+        meta_parts = []
+        if bpm:                meta_parts.append(f"{int(bpm)} BPM")
+        if key:                meta_parts.append(key)
+        if energy is not None: meta_parts.append(f"energy {float(energy):.2f}")
+        meta = " · ".join(meta_parts)
+
+        matched_tags = score_detail.get("matched_tags", {})
+        tags_html = ""
+        for t in tags_l[:6]:
+            conf = matched_tags.get(t) or matched_tags.get(t.lower())
+            if conf:
+                tags_html += (
+                    f'<span class="tag" style="opacity:{max(0.4,conf):.1f};'
+                    f'border:1px solid #4444aa">{t} {int(conf*100)}%</span>'
+                )
+            else:
+                tags_html += f'<span class="tag">{t}</span>'
+
+        # ── Two columns: card info | audio player ─────────────────────────────
+        # Mirrors Tagger.py's col_left / col_center pattern exactly.
+        # st.audio() is ONLY ever called inside a column, never adjacent to
+        # a st.markdown(unsafe_allow_html=True) block.
+        col_card, col_play = st.columns([3, 1])
+
+        with col_card:
+            st.markdown(f"""
+            <div class="result-card">
+              <div style="display:flex;gap:14px;align-items:flex-start">
+                <div class="rank">{i}</div>
+                <div style="flex:1">
+                  <div class="title">{title}</div>
+                  <div class="artist">{artist}</div>
+                  <div class="meta">{meta}</div>
+                  <div style="margin-top:6px">{tags_html}</div>
+                  <div style="margin-top:4px">{inferred_html} {direction_html}</div>
+                  <div class="sim-bar" style="width:{bar_pct}%;background:{bar_colour}"></div>
+                  <div style="font-size:10px;color:#555;margin-top:2px">{bar_pct}% match</div>
+                </div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col_play:
+            # Exact same call as Tagger.py — string path, not bytes
+            if filepath and os.path.exists(filepath):
+                st.audio(filepath, format="audio/mp3")
+            elif filepath:
+                st.caption(f"⚠️ File not found")
+
+
+# ── Similarity search ─────────────────────────────────────────────────────────
 async def find_similar(source_id: str, n: int = 7):
     source = await db.get_track_by_id(source_id)
     if not source:
@@ -175,177 +250,150 @@ async def find_similar(source_id: str, n: int = 7):
 
     embedding = getattr(source, "embedding", None)
     if not embedding:
-        return source, []           # No embedding — can't do similarity
+        return source, []
 
-    raw = await db.find_similar_tracks(
-        query_embedding=embedding,
-        limit=n + 1,
-        threshold=0.2,
-    )
-
-    # Exclude the source itself
+    raw = await db.find_similar_tracks(query_embedding=embedding, limit=n + 1, threshold=0.2)
     results = [r for r in raw if str(r.get("id") or r.get("trackid")) != str(source_id)][:n]
 
-    # Enrich each result with full metadata for direction analysis
     enriched = []
     for r in results:
-        rid = r.get("id") or r.get("trackid")
+        rid  = r.get("id") or r.get("trackid")
         full = await db.get_track_by_id(str(rid))
         sim  = float(r.get("similarity", 0.5))
         if full:
-            # Re-compute cosine similarity if we have both embeddings
             c_emb = getattr(full, "embedding", None)
             if c_emb and embedding:
                 sim = cosine_similarity(embedding, c_emb)
             enriched.append((sim, full))
         else:
-            enriched.append((sim, r))       # fallback to raw dict
+            enriched.append((sim, r))
 
     enriched.sort(key=lambda x: x[0], reverse=True)
     return source, enriched
 
-# ── UI ────────────────────────────────────────────────────────────────────────
+
+# =============================================================================
+# UI — tabs come AFTER all function definitions
+# =============================================================================
 st.title("🔀 DJMate — Similar Tracks Explorer")
-st.caption("Pick a track and see 7 similar tracks with directional descriptions.")
 
 track_index = load_track_index()
-
 if not track_index:
     st.error("No tracks loaded — check your Supabase connection.")
     st.stop()
 
-col1, col2 = st.columns([3, 1])
+labels    = [t[0] for t in track_index]
+track_ids = [t[1] for t in track_index]
 
-with col1:
-    labels    = [t[0] for t in track_index]
-    track_ids = [t[1] for t in track_index]
+tab_pick, tab_describe = st.tabs(["🎵 Pick a track", "💬 Describe what you want"])
 
-    # Searchable selectbox
+# =============================================================================
+# TAB 1 — Pick a track
+# =============================================================================
+with tab_pick:
+    st.caption("Pick a track and find similar ones by sound.")
+
     selected_label = st.selectbox(
-        "Search for a track:",
-        options=labels,
-        index=None,
-        placeholder="Type to search...",
-        key="track_select"
+        "Search for a track:", options=labels, index=None,
+        placeholder="Type to search…", key="track_select",
     )
+    selected_id = track_ids[labels.index(selected_label)] if selected_label else None
 
-    selected_id = None
-    if selected_label:
-        selected_id = track_ids[labels.index(selected_label)]
+    search_btn = st.button("Find Similar Tracks", type="primary", key="pick_btn")
+    st.divider()
 
-with col2:
-    n_similar = st.slider("Results", 4, 12, 7)
-    search_btn = st.button("Find Similar Tracks", type="primary", use_container_width=True)
+    if search_btn and selected_id:
+        with st.spinner("Computing similarity…"):
+            source, similar = run_async(find_similar(selected_id, 7))
 
-st.divider()
+        if source is None:
+            st.error("Track not found.")
+            st.stop()
 
-if search_btn and selected_id:
-    with st.spinner("Computing similarity..."):
-        source, similar = run_async(find_similar(selected_id, n_similar))
+        s_title  = getattr(source, "title",    None) or "Unknown"
+        s_artist = getattr(source, "artist",   None) or "Unknown"
+        s_bpm    = getattr(source, "bpm",      None)
+        s_key    = getattr(source, "key",      None)
+        s_energy = getattr(source, "energy",   None)
+        s_path   = getattr(source, "filepath", None)
 
-    if source is None:
-        st.error("Track not found.")
-        st.stop()
-
-    # ── Source track card ─────────────────────────────────────────────────────
-    s_title  = getattr(source, "title",  None) or "Unknown"
-    s_artist = getattr(source, "artist", None) or "Unknown"
-    s_bpm    = getattr(source, "bpm",    None)
-    s_key    = getattr(source, "key",    None)
-    s_energy = getattr(source, "energy", None)
-    s_tags   = getattr(source, "semantic_tags", None) or []
-
-    st.markdown(f"""
-    <div style="background:#0a0a1a;border:1px solid #00ffff;border-radius:10px;padding:16px 20px;margin-bottom:20px">
-      <div style="font-size:11px;color:#00ffff;opacity:.7;margin-bottom:4px">SOURCE TRACK</div>
-      <div style="font-size:18px;font-weight:bold;color:#fff">{s_title}</div>
-      <div style="font-size:13px;color:#aaa;margin-top:3px">{s_artist}</div>
-      <div style="font-size:12px;color:#666;margin-top:6px">
-        {f'{int(s_bpm)} BPM' if s_bpm else ''}
-        {' · ' + s_key if s_key else ''}
-        {f' · energy {s_energy:.2f}' if s_energy else ''}
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Source track audio
-    source_path = getattr(source, "filepath", None)
-    if source_path and os.path.exists(source_path):
-        try:
-            with open(source_path, "rb") as f:
-                st.audio(f.read(), format="audio/mp3")
-        except Exception:
-            pass
-
-    if not similar:
-        st.warning("No embedding found for this track — run your embedding pipeline first.")
-        st.stop()
-
-    # ── Results ───────────────────────────────────────────────────────────────
-    st.markdown(f"### {len(similar)} similar tracks")
-
-    for i, (sim_score, track) in enumerate(similar, 1):
-        if hasattr(track, "title"):
-            title  = track.title or "Unknown"
-            artist = track.artist or "Unknown"
-            bpm    = track.bpm
-            key    = track.key
-            energy = track.energy
-            tags_l = track.semantic_tags or []
-            filepath = getattr(track, "filepath", None)
-        elif isinstance(track, dict):
-            title  = track.get("title")  or "Unknown"
-            artist = track.get("artist") or "Unknown"
-            bpm    = track.get("bpm")
-            key    = track.get("key")
-            energy = track.get("energy")
-            tags_l = track.get("semantic_tags") or []
-            filepath = track.get("filepath")
-        else:
-            title = artist = "Unknown"
-            bpm = key = energy = None
-            tags_l = []
-            filepath = None
-
-        direction, d_colour = describe_direction(source, track)
-
-        # Similarity bar colour (green → yellow → red)
-        bar_pct   = int(sim_score * 100)
-        bar_colour = "#00ff88" if sim_score > 0.7 else "#ffaa00" if sim_score > 0.4 else "#ff4444"
-
-        meta_parts = []
-        if bpm:    meta_parts.append(f"{int(bpm)} BPM")
-        if key:    meta_parts.append(key)
-        if energy: meta_parts.append(f"energy {energy:.2f}")
-        meta = " · ".join(meta_parts)
-
-        tags_html = "".join(f'<span class="tag">{t}</span>' for t in tags_l[:5])
-
-        st.markdown(f"""
-        <div class="result-card">
-          <div style="display:flex;gap:14px;align-items:flex-start">
-            <div class="rank">{i}</div>
-            <div style="flex:1">
-              <div class="title">{title}</div>
-              <div class="artist">{artist}</div>
-              <div class="meta">{meta}</div>
-              <div style="margin-top:6px">{tags_html}</div>
-              <div>
-                <span class="direction-badge" style="background:{d_colour}22;color:{d_colour};border:1px solid {d_colour}66">
-                  ↗ {direction}
-                </span>
+        # Source track — same two-column layout
+        col_src, col_src_play = st.columns([3, 1])
+        with col_src:
+            st.markdown(f"""
+            <div style="background:#0a0a1a;border:1px solid #00ffff;border-radius:10px;padding:16px 20px;margin-bottom:8px">
+              <div style="font-size:11px;color:#00ffff;opacity:.7;margin-bottom:4px">SOURCE TRACK</div>
+              <div style="font-size:18px;font-weight:bold;color:#fff">{s_title}</div>
+              <div style="font-size:13px;color:#aaa;margin-top:3px">{s_artist}</div>
+              <div style="font-size:12px;color:#666;margin-top:6px">
+                {f'{int(s_bpm)} BPM' if s_bpm else ''}
+                {' · ' + s_key if s_key else ''}
+                {f' · energy {s_energy:.2f}' if s_energy else ''}
               </div>
-              <div class="sim-bar" style="width:{bar_pct}%;background:{bar_colour}"></div>
-              <div style="font-size:10px;color:#555;margin-top:2px">{bar_pct}% similarity</div>
             </div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
+        with col_src_play:
+            if s_path and os.path.exists(s_path):
+                st.audio(s_path, format="audio/mp3")
 
-        # Native Streamlit audio playback (supports local file paths)
-        if filepath and os.path.exists(filepath):
-            try:
-                with open(filepath, "rb") as f:
-                    st.audio(f.read(), format="audio/mp3")
-            except Exception:
-                pass
+        if not similar:
+            st.warning("No embedding found — run your embedding pipeline first.")
+            st.stop()
+
+        st.markdown(f"### {len(similar)} similar tracks")
+        _render_results(similar, source)
+
+
+# =============================================================================
+# TAB 2 — Describe what you want
+# =============================================================================
+with tab_describe:
+    st.caption('Describe the vibe. e.g. "fast kicking house", "dark minimal give me 8"')
+
+    query_input = st.text_input(
+        "What do you want to play next?",
+        placeholder='e.g. "upbeat deep house", "dark minimal techno give me 8"',
+        key="semantic_query",
+    )
+    describe_btn = st.button("Search", type="primary", key="describe_btn")
+    st.divider()
+
+    if describe_btn and query_input.strip():
+        try:
+            from Backend.llm_interpreter import SemanticInterpreter, InterpretationContext
+        except ImportError:
+            st.error("SemanticInterpreter not found — check Backend/llm_interpreter.py")
+            st.stop()
+
+        @st.cache_resource
+        def get_interpreter():
+            interp = SemanticInterpreter(supabase_client=db.client)
+            run_async(interp.initialize())
+            return interp
+
+        interpreter = get_interpreter()
+
+        with st.spinner("Interpreting your request…"):
+            params = run_async(interpreter.interpret(query_input.strip()))
+
+        with st.spinner(f"Finding up to {params.get('track_count', 5)} tracks…"):
+            tracks, meta = run_async(interpreter.search(params, db_manager=db))
+
+        if meta.get("relaxation_step", 0) > 0:
+            st.markdown(
+                f'<div class="relax-notice">⚡ Widened search ({meta.get("relaxation_label","")})</div>',
+                unsafe_allow_html=True,
+            )
+        if meta.get("inferred_count", 0) > 0:
+            st.markdown(
+                f'<div class="relax-notice">🔮 {meta["inferred_count"]} track(s) inferred by sound similarity</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(
+            f"**{len(tracks)} tracks** · _{params.get('reasoning', '')}_ "
+            f"· confidence {params.get('confidence', 0):.0%} "
+            f"· `{params.get('model_used', 'fallback')}`"
+        )
+
+        _render_results([(t.get("_relevance_score", 0.5), t) for t in tracks])
