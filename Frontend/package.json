@@ -14,6 +14,7 @@
     "react-dom": "^18.3.1"
   },
   "dependencies": {
+    "@hello-pangea/dnd": "github:hello-pangea/dnd",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
@@ -33,13 +34,13 @@
     "lucide-react": "^0.563.0",
     "ml-matrix": "^6.12.1",
     "react": "^18.3.1",
-    "react-beautiful-dnd": "^13.1.1",
     "react-dom": "^18.3.1",
     "react-error-boundary": "^4.1.2",
+    "react-force-graph-3d": "^1.29.1",
     "react-hook-form": "^7.71.1",
     "react-konva": "^18.2.14",
     "socket.io-client": "^4.8.3",
-    "three": "^0.158.0",
+    "three": "^0.182.0",
     "tone": "^14.9.17",
     "umap-js": "^1.4.0",
     "wavesurfer.js": "^7.12.1",

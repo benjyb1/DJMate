@@ -1,4 +1,4 @@
-// src/api/apiClient.js
+// src/api/apiClient.js - Fixed version with pagination and memory management
 class APIError extends Error {
   constructor(message, status, response) {
     super(message);
@@ -14,10 +14,24 @@ class APIClient {
     this.defaultHeaders = {
       'Content-Type': 'application/json',
     };
+    this.requestCache = new Map();
+    this.maxCacheSize = 50;
   }
 
   async request(endpoint, options = {}) {
     const url = `${this.baseURL}${endpoint}`;
+    
+    // Check cache for GET requests
+    if (!options.method || options.method === 'GET') {
+      const cached = this.requestCache.get(url);
+      if (cached && Date.now() - cached.timestamp < 60000) { // 1 min cache
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`📦 Cached: ${url}`);
+        }
+        return cached.data;
+      }
+    }
+
     const config = {
       headers: { ...this.defaultHeaders, ...options.headers },
       ...options,
@@ -42,6 +56,16 @@ class APIClient {
         );
       }
 
+      // Cache GET requests
+      if (!options.method || options.method === 'GET') {
+        this.requestCache.set(url, { data, timestamp: Date.now() });
+        // Evict old entries if cache is too large
+        if (this.requestCache.size > this.maxCacheSize) {
+          const firstKey = this.requestCache.keys().next().value;
+          this.requestCache.delete(firstKey);
+        }
+      }
+
       // Log successful responses in development
       if (process.env.NODE_ENV === 'development') {
         console.log(`✅ API Response: ${config.method || 'GET'} ${url}`, data);
@@ -55,7 +79,11 @@ class APIClient {
       
       // Handle network errors
       console.error(`❌ API Network Error: ${config.method || 'GET'} ${url}`, error);
-      throw new APIError('Network error - please check your connection', 0, null);
+      throw new APIError(
+        'Network error - check if backend is running on http://localhost:8000',
+        0,
+        null
+      );
     }
   }
 
@@ -87,6 +115,62 @@ class APIClient {
     return this.request(endpoint, {
       method: 'DELETE',
     });
+  }
+
+  /**
+   * Fetch all tracks with automatic pagination
+   * This prevents ERR_INSUFFICIENT_RESOURCES by batching requests
+   */
+  async getAllTracksPaginated(batchSize = 100) {
+    let allTracks = [];
+    let offset = 0;
+    let hasMore = true;
+
+    console.log('🎵 Starting paginated track fetch...');
+
+    try {
+      while (hasMore) {
+        const response = await this.get('/tracks', {
+          limit: batchSize,
+          offset: offset
+        });
+
+        if (response.tracks && response.tracks.length > 0) {
+          allTracks = [...allTracks, ...response.tracks];
+          offset += batchSize;
+          hasMore = response.has_more || false;
+          
+          console.log(`📥 Loaded ${allTracks.length}/${response.total} tracks`);
+          
+          // Add small delay between requests to prevent overwhelming the server
+          if (hasMore) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        } else {
+          hasMore = false;
+        }
+
+        // Safety limit: don't load more than 2000 tracks at once
+        if (allTracks.length >= 2000) {
+          console.warn('⚠️ Reached 2000 track limit, stopping pagination');
+          hasMore = false;
+        }
+      }
+
+      console.log(`✅ Loaded ${allTracks.length} total tracks`);
+      return allTracks;
+    } catch (error) {
+      console.error('❌ Pagination failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Clear request cache
+   */
+  clearCache() {
+    this.requestCache.clear();
+    console.log('🗑️ Request cache cleared');
   }
 }
 

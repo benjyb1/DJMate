@@ -1,6 +1,6 @@
 // src/components/CrateInspector.jsx
 import React, { useState, useEffect, useCallback } from 'react';
-import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
+import { DragDropContext, Droppable, Draggable } from 'hello-pangea/dnd';
 import { 
   Play, 
   Pause, 

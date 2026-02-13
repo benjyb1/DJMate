@@ -1,4 +1,4 @@
-// Frontend/src/components/MusicCloud3D.jsx
+// Frontend/src/components/MusicCloud3D.jsx - FIXED to use real UMAP coordinates
 import React, { useRef, useMemo, useState, useEffect } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Text, Billboard, OrbitControls } from '@react-three/drei';
@@ -32,7 +32,7 @@ const TrackNode = ({
     if (hovered) return '#ffffff';
     
     // Color by BPM range
-    const bpm = track.bmp || 120;
+    const bpm = track.bpm || 120;
     if (bpm < 110) return '#4a90e2'; // Blue for slower tracks
     if (bpm < 125) return '#7b68ee'; // Purple for mid-tempo
     if (bpm < 140) return '#ff6b6b'; // Red for faster tracks
@@ -164,41 +164,27 @@ const MusicCloud3D = ({
   const [draggedTrack, setDraggedTrack] = useState(null);
   const [isDragMode, setIsDragMode] = useState(false);
   
-  // UMAP-based positioning (simulated for now - you'll connect to your actual UMAP data)
-  const trackPositions = useMemo(() => {
-    if (!tracks.length) return {};
-    
-    // For now, generate positions based on track properties
-    // In production, you'll use your UMAP coordinates
-    const positions = {};
-    
-    tracks.forEach((track, index) => {
-      // Simulate UMAP coordinates based on audio features
-      const bpm = track.bpm || 120;
-      const energy = track.energy || 0.5;
-      
-      // Create clusters based on BPM and energy
-      const bpmNormalized = (bpm - 80) / 100; // Normalize BPM to 0-1 range
-      const angle = (index / tracks.length) * Math.PI * 2;
-      const radius = energy * 15 + 5;
-      
-      positions[track.id || track.trackid] = [
-        Math.cos(angle) * radius + (bpmNormalized - 0.5) * 20,
-        (energy - 0.5) * 20,
-        Math.sin(angle) * radius
-      ];
-    });
-    
-    return positions;
-  }, [tracks]);
-  
-  // Enhanced track data with positions
+  // CRITICAL FIX: Use ACTUAL UMAP positions from backend, not fake generated ones!
   const enhancedTracks = useMemo(() => {
-    return tracks.map(track => ({
-      ...track,
-      position: trackPositions[track.id || track.trackid] || [0, 0, 0]
-    }));
-  }, [tracks, trackPositions]);
+    return tracks.map(track => {
+      // Use precomputed UMAP position from backend if available
+      // Backend now returns position: [x, y, z] from x_coord, y_coord, z_coord
+      if (track.position && Array.isArray(track.position) && track.position.length === 3) {
+        // Track already has UMAP coordinates from backend - USE THEM!
+        return {
+          ...track,
+          position: track.position
+        };
+      } else {
+        // Fallback for tracks without coordinates (shouldn't happen if 3d_Coordinator ran)
+        console.warn(`Track ${track.id || track.trackid} missing UMAP coordinates - using fallback`);
+        return {
+          ...track,
+          position: [0, 0, 0] // Center position as fallback
+        };
+      }
+    });
+  }, [tracks]);
 
   const handleTrackClick = (track) => {
     if (isDragMode) return;
@@ -260,6 +246,20 @@ const MusicCloud3D = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [camera, activeTrack]);
+
+  // Log stats on mount to verify UMAP coordinates are being used
+  useEffect(() => {
+    if (tracks.length > 0) {
+      const tracksWithPositions = tracks.filter(t => 
+        t.position && Array.isArray(t.position) && t.position.length === 3
+      );
+      console.log(`📍 Using UMAP positions: ${tracksWithPositions.length}/${tracks.length} tracks have coordinates`);
+      
+      if (tracksWithPositions.length === 0) {
+        console.error('❌ NO TRACKS HAVE UMAP COORDINATES! Run 3d_Coordinator.py to generate them.');
+      }
+    }
+  }, [tracks]);
 
   return (
     <>
