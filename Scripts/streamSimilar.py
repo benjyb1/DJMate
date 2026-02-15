@@ -423,6 +423,14 @@ with tab_describe:
         with st.spinner(f"Finding up to {params.get('track_count', 5)} tracks…"):
             tracks, meta = run_async(interpreter.search(params, db_manager=db))
 
+        # Enrich with filepath from DB (same method as Tab 1)
+        for t in tracks:
+            tid = t.get("trackid")
+            if tid and (not t.get("filepath") or not os.path.exists(t.get("filepath", ""))):
+                full = get_track_with_filepath(tid)
+                if full:
+                    t["filepath"] = full.get("filepath")
+
         if meta.get("relaxation_step", 0) > 0:
             st.markdown(
                 f'<div class="relax-notice">⚡ Widened search ({meta.get("relaxation_label","")})</div>',
