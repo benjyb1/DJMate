@@ -145,35 +145,43 @@ def cosine_similarity(v1, v2) -> float:
     except Exception:
         return 0.0
 
+# ── Helper to get track with filepath (like Tagger.py) ───────────────────────
+def get_track_with_filepath(trackid):
+    """Get track data directly from Supabase, including filepath - just like Tagger.py"""
+    resp = db.client.table("tracks") \
+        .select("trackid, title, artist, filepath, bpm, key, embedding, track_labels(semantic_tags, energy, vibe)") \
+        .eq("trackid", trackid) \
+        .single() \
+        .execute()
+    return resp.data if resp.data else None
+
 
 # =============================================================================
-# ★ _render_results — defined HERE, before any tabs that call it
-#
-#   Audio is in its own st.columns() cell, completely isolated from the HTML
-#   markdown block. This is the exact pattern from Tagger.py that works.
+# ★ _render_results — simplified, just like Tagger.py
 # =============================================================================
 def _render_results(pairs: list, source=None):
     for i, (sim_score, track) in enumerate(pairs, 1):
 
+        # Extract data - works for both dict and object
         if isinstance(track, dict):
-            title        = track.get("title")         or "Unknown"
-            artist       = track.get("artist")        or "Unknown"
-            bpm          = track.get("bpm")
-            key          = track.get("key")
-            energy       = track.get("energy")
-            tags_l       = track.get("semantic_tags") or []
-            filepath     = track.get("filepath")
-            inferred     = track.get("_inferred",     False)
+            title    = track.get("title", "Unknown")
+            artist   = track.get("artist", "Unknown")
+            bpm      = track.get("bpm")
+            key      = track.get("key")
+            energy   = track.get("energy")
+            tags_l   = track.get("semantic_tags") or []
+            filepath = track.get("filepath")  # ← THE CRITICAL LINE
+            inferred = track.get("_inferred", False)
             score_detail = track.get("_score_detail", {})
         else:
-            title        = getattr(track, "title",         None) or "Unknown"
-            artist       = getattr(track, "artist",        None) or "Unknown"
-            bpm          = getattr(track, "bpm",           None)
-            key          = getattr(track, "key",           None)
-            energy       = getattr(track, "energy",        None)
-            tags_l       = getattr(track, "semantic_tags", None) or []
-            filepath     = getattr(track, "filepath",      None)
-            inferred     = getattr(track, "_inferred",     False)
+            title    = getattr(track, "title", "Unknown")
+            artist   = getattr(track, "artist", "Unknown")
+            bpm      = getattr(track, "bpm", None)
+            key      = getattr(track, "key", None)
+            energy   = getattr(track, "energy", None)
+            tags_l   = getattr(track, "semantic_tags", [])
+            filepath = getattr(track, "filepath", None)  # ← THE CRITICAL LINE
+            inferred = getattr(track, "_inferred", False)
             score_detail = getattr(track, "_score_detail", {})
 
         direction_html = ""
@@ -210,10 +218,7 @@ def _render_results(pairs: list, source=None):
             else:
                 tags_html += f'<span class="tag">{t}</span>'
 
-        # ── Two columns: card info | audio player ─────────────────────────────
-        # Mirrors Tagger.py's col_left / col_center pattern exactly.
-        # st.audio() is ONLY ever called inside a column, never adjacent to
-        # a st.markdown(unsafe_allow_html=True) block.
+        # Two columns: card | audio (exactly like Tagger.py pattern)
         col_card, col_play = st.columns([3, 1])
 
         with col_card:
@@ -235,45 +240,76 @@ def _render_results(pairs: list, source=None):
             """, unsafe_allow_html=True)
 
         with col_play:
-            # Exact same call as Tagger.py — string path, not bytes
+            # EXACTLY like Tagger.py
             if filepath and os.path.exists(filepath):
                 st.audio(filepath, format="audio/mp3")
             elif filepath:
-                st.caption(f"⚠️ File not found")
+                st.caption(f"⚠️ Not found")
+            else:
+                st.caption(f"⚠️ No path")
 
 
-# ── Similarity search ─────────────────────────────────────────────────────────
+# ── Similarity search (fetch filepath directly from DB) ───────────────────────
 async def find_similar(source_id: str, n: int = 7):
-    source = await db.get_track_by_id(source_id)
-    if not source:
+    # Get source track with filepath
+    source_data = get_track_with_filepath(source_id)
+    if not source_data:
         return None, []
 
-    embedding = getattr(source, "embedding", None)
-    if not embedding:
-        return source, []
+    # Get the embedding
+    source_embedding = source_data.get("embedding")
+    if not source_embedding:
+        return source_data, []
 
-    raw = await db.find_similar_tracks(query_embedding=embedding, limit=n + 1, threshold=0.2)
-    results = [r for r in raw if str(r.get("id") or r.get("trackid")) != str(source_id)][:n]
+    # Find similar tracks using RPC
+    raw = await db.find_similar_tracks(query_embedding=source_embedding, limit=n + 1, threshold=0.2)
 
-    enriched = []
-    for r in results:
-        rid  = r.get("id") or r.get("trackid")
-        full = await db.get_track_by_id(str(rid))
-        sim  = float(r.get("similarity", 0.5))
-        if full:
-            c_emb = getattr(full, "embedding", None)
-            if c_emb and embedding:
-                sim = cosine_similarity(embedding, c_emb)
-            enriched.append((sim, full))
-        else:
-            enriched.append((sim, r))
+    # Filter out source track and get full data for each result
+    similar = []
+    for r in raw:
+        rid = r.get("id") or r.get("trackid")
+        if str(rid) == str(source_id):
+            continue
 
-    enriched.sort(key=lambda x: x[0], reverse=True)
-    return source, enriched
+        # Get full track data with filepath - DIRECTLY FROM SUPABASE
+        full_data = get_track_with_filepath(rid)
+        if full_data:
+            # Calculate similarity
+            sim = float(r.get("similarity", 0.5))
+            target_emb = full_data.get("embedding")
+            if target_emb and source_embedding:
+                sim = cosine_similarity(source_embedding, target_emb)
+
+            # Extract labels if nested
+            labels = full_data.get("track_labels")
+            if isinstance(labels, list) and labels:
+                labels = labels[0]
+            elif not isinstance(labels, dict):
+                labels = {}
+
+            # Build clean dict with filepath
+            track_dict = {
+                "trackid": full_data.get("trackid"),
+                "title": full_data.get("title"),
+                "artist": full_data.get("artist"),
+                "bpm": full_data.get("bpm"),
+                "key": full_data.get("key"),
+                "filepath": full_data.get("filepath"),  # ← CRITICAL
+                "energy": labels.get("energy"),
+                "semantic_tags": labels.get("semantic_tags") or [],
+                "vibe_descriptors": labels.get("vibe") or [],
+            }
+            similar.append((sim, track_dict))
+
+        if len(similar) >= n:
+            break
+
+    similar.sort(key=lambda x: x[0], reverse=True)
+    return source_data, similar
 
 
 # =============================================================================
-# UI — tabs come AFTER all function definitions
+# UI
 # =============================================================================
 st.title("🔀 DJMate — Similar Tracks Explorer")
 
@@ -310,12 +346,19 @@ with tab_pick:
             st.error("Track not found.")
             st.stop()
 
-        s_title  = getattr(source, "title",    None) or "Unknown"
-        s_artist = getattr(source, "artist",   None) or "Unknown"
-        s_bpm    = getattr(source, "bpm",      None)
-        s_key    = getattr(source, "key",      None)
-        s_energy = getattr(source, "energy",   None)
-        s_path   = getattr(source, "filepath", None)
+        # Extract source labels
+        s_labels = source.get("track_labels")
+        if isinstance(s_labels, list) and s_labels:
+            s_labels = s_labels[0]
+        elif not isinstance(s_labels, dict):
+            s_labels = {}
+
+        s_title  = source.get("title", "Unknown")
+        s_artist = source.get("artist", "Unknown")
+        s_bpm    = source.get("bpm")
+        s_key    = source.get("key")
+        s_energy = s_labels.get("energy")
+        s_path   = source.get("filepath")
 
         # Source track — same two-column layout
         col_src, col_src_play = st.columns([3, 1])
@@ -333,11 +376,12 @@ with tab_pick:
             </div>
             """, unsafe_allow_html=True)
         with col_src_play:
+            # EXACTLY like Tagger.py
             if s_path and os.path.exists(s_path):
                 st.audio(s_path, format="audio/mp3")
 
         if not similar:
-            st.warning("No embedding found — run your embedding pipeline first.")
+            st.warning("No similar tracks found.")
             st.stop()
 
         st.markdown(f"### {len(similar)} similar tracks")

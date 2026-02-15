@@ -4,10 +4,10 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import asyncio
 
-from Backend.llm_interpreter import SemanticInterpreter
-from Backend.recommender import DJRecommendationEngine
-from Backend.data.db_interface import DatabaseManager
-
+from Scripts.Backend.llm_interpreter import SemanticInterpreter
+from Scripts.Backend.reccomender import DJRecommendationEngine
+from Scripts.Backend.data.db_interface import DatabaseManager
+from Scripts.Backend.chat_router import router as chat_router
 app = FastAPI(title="AI DJ Curation API", version="2.0.0")
 
 # Configure CORS
@@ -18,7 +18,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+app.include_router(chat_router, prefix="/chat", tags=["chat"])
 # ── Request models ────────────────────────────────────────────────────────────
 
 class NaturalLanguageQuery(BaseModel):

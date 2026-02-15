@@ -655,6 +655,7 @@ class DatabaseManager:
                     "artist":     row.get("artist", "Unknown"),
                     "bpm":        row.get("bpm"),
                     "key":        row.get("key"),
+                    "filepath":   row.get("filepath"),  # Added for audio playback
                     "similarity": row.get("similarity", 0.0),
                 })
             return results
