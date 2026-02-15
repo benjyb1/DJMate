@@ -45,7 +45,9 @@ class CrateOperation(BaseModel):
 
 db_manager = DatabaseManager()
 embedding_index = None
-semantic_interpreter = SemanticInterpreter()
+semantic_interpreter = SemanticInterpreter(
+    db_manager=db_manager
+)
 recommendation_engine = DJRecommendationEngine(
     db_manager=db_manager,
     embedding_index=None
