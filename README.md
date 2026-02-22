@@ -16,6 +16,8 @@ A full-stack AI music curation system that lets DJs explore, search, and discove
 ## Screenshots
 
 ![3D Music Space](screenshots/3d-overview.png)
+>Overview of the dashboard
+Overview of the dashboard
 ![Track Selected](screenshots/3d-zoomed.png)
 ![Vibe Search](screenshots/chat-vibe.png)
 ![Find Similar](screenshots/chat-find.png)
