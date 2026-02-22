@@ -14,16 +14,22 @@ A full-stack AI music curation system that lets DJs explore, search, and discove
 ---
 
 ## Screenshots
-Overview of the dashboard
-![3D Music Space](screenshots/3d-overview.png)
-You can request similar sounding tracks
-![Track Selected](screenshots/3d-zoomed.png)
-Ask it for a certain vibe
-![Vibe Search](screenshots/chat-vibe.png)
-Let it take your set in any direction
-![Find Similar](screenshots/chat-find.png)
-A view of the backend, how I tagged hundreds of songs alongisde a reinforcement learning model
-![Tagger UI](screenshots/tagger.png)
+
+Overview of the dashboard  
+<img src="screenshots/3d-overview.png" width="800">
+
+You can request similar sounding tracks  
+<img src="screenshots/3d-zoomed.png" width="800">
+
+Ask it for a certain vibe &nbsp;&nbsp;&nbsp; Let it take your set in any direction
+
+<p float="left">
+  <img src="screenshots/chat-vibe.png" width="400">
+  <img src="screenshots/chat-find.png" width="400">
+</p>
+
+A view of the backend, how I tagged hundreds of songs alongside a reinforcement learning model  
+<img src="screenshots/tagger.png" width="800">
 
 ---
 
