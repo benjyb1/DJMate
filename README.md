@@ -9,7 +9,7 @@
 
 A full-stack AI music curation system that lets DJs explore, search, and discover tracks from their personal library using natural language, audio embeddings, and semantic tagging — all visualised in an interactive 3D space.
 
-> Built for DJs who think in vibes, not genres.
+> A new way to curate DJ sets.
 
 ---
 
