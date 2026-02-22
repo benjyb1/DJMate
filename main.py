@@ -13,10 +13,10 @@ import os
 import json
 import numpy as np
 
-from Scripts.Backend.llm_interpreter import SemanticInterpreter
-from Scripts.Backend.reccomender import DJRecommendationEngine
-from Scripts.Backend.data.db_interface import DatabaseManager
-from Scripts.Backend.chat_router import router as chat_router
+from backend.llm_interpreter import SemanticInterpreter
+from backend.reccomender import DJRecommendationEngine
+from backend.data.db_interface import DatabaseManager
+from backend.chat_router import router as chat_router
 app = FastAPI(title="AI DJ Curation API", version="2.0.0")
 
 # Configure CORS

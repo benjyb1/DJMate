@@ -135,19 +135,21 @@ CREATE TABLE track_labels (
 ```
 DJMate/
 ├── main.py                          # FastAPI app entry point
-├── Frontend/
-│   └── src/components/
-│       └── DJChatbox.jsx            # Floating semantic search panel
-├── Scripts/
-│   ├── Backend/
-│   │   ├── llm_interpreter.py       # Intent classifier + tag scorer
-│   │   ├── chat_router.py           # /chat/* FastAPI router
-│   │   ├── Tagger.py                # Streamlit manual tagging UI
-│   │   ├── auto_tagger.py           # Batch ML auto-tagger
-│   │   └── data/
-│   │       └── db_interface.py      # DatabaseManager (asyncpg + Supabase)
-│   ├── 3d Coordinator.py            # UMAP projection script
-│   └── repath_tracks.py             # Filepath repair utility
+├── backend/
+│   ├── llm_interpreter.py           # Intent classifier + tag scorer
+│   ├── chat_router.py               # /chat/* FastAPI router
+│   ├── Tagger.py                    # Streamlit manual tagging UI
+│   ├── auto_tagger.py               # Batch ML auto-tagger
+│   ├── reccomender.py               # Recommendation engine
+│   └── data/
+│       └── db_interface.py          # DatabaseManager (asyncpg + Supabase)
+├── scripts/
+│   ├── 3d_coordinator.py            # UMAP projection script
+│   ├── repath_tracks.py             # Filepath repair utility
+│   └── upload_album_covers.py       # Album art uploader
+└── Frontend/
+    └── src/components/
+        └── DJChatbox.jsx            # Floating semantic search panel
 ```
 
 ---
@@ -187,24 +189,24 @@ npm run dev
 ### Tagging UI
 
 ```bash
-streamlit run Scripts/Backend/Tagger.py
+streamlit run backend/Tagger.py
 ```
 
 ### Auto-tag your library
 
 ```bash
 # Preview first
-python Scripts/Backend/auto_tagger.py --dry-run
+python backend/auto_tagger.py --dry-run
 
 # Run
-python Scripts/Backend/auto_tagger.py --min-sim 0.70
+python backend/auto_tagger.py --min-sim 0.70
 ```
 
 ### Repath tracks after moving files
 
 ```bash
-python Scripts/repath_tracks.py --root "/path/to/your/music" --dry-run
-python Scripts/repath_tracks.py --root "/path/to/your/music"
+python scripts/repath_tracks.py --root "/path/to/your/music" --dry-run
+python scripts/repath_tracks.py --root "/path/to/your/music"
 ```
 
 ---

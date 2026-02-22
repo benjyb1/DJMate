@@ -29,10 +29,7 @@ _db          = None
 def _get_db():
     global _db
     if _db is None:
-        try:
-            from Scripts.Backend.data.db_interface import DatabaseManager
-        except ImportError:
-            from Backend.data.db_interface import DatabaseManager
+        from backend.data.db_interface import DatabaseManager
         _db = DatabaseManager(enable_caching=True, pool_size=10)
     return _db
 
@@ -40,10 +37,7 @@ def _get_db():
 async def _get_interpreter():
     global _interpreter
     if _interpreter is None:
-        try:
-            from Scripts.Backend.llm_interpreter import SemanticInterpreter
-        except ImportError:
-            from Backend.llm_interpreter import SemanticInterpreter
+        from backend.llm_interpreter import SemanticInterpreter
         db = _get_db()
         _interpreter = SemanticInterpreter(supabase_client=db.client)
         await _interpreter.initialize()
@@ -192,10 +186,7 @@ async def interpret(req: InterpretRequest):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-    try:
-        from Scripts.Backend.llm_interpreter import InterpretationContext
-    except ImportError:
-        from Backend.llm_interpreter import InterpretationContext
+    from backend.llm_interpreter import InterpretationContext
 
     context = None
     if req.current_track:
@@ -255,8 +246,11 @@ async def search(req: SearchRequest):
 
             # Fetch the matched track itself to put it first in results
             matched_track_full = await db.get_track_by_id(best_id)
+            modifier = (params.get("modifier") or "").lower().strip()
 
-            similar_raw = await _embedding_search_for_track(db, best_id, track_count)
+            # Fetch more candidates than needed so we can re-rank with modifier
+            fetch_count = track_count * 3 if modifier else track_count
+            similar_raw = await _embedding_search_for_track(db, best_id, fetch_count)
 
             # Build the matched track as the first result (relevance_score=1.0)
             matched_result = None
@@ -278,6 +272,34 @@ async def search(req: SearchRequest):
                     relevance_score=  1.0,
                     inferred=         False,
                 )
+
+            # Re-rank by modifier if present
+            if modifier and similar_raw:
+                source_energy = float(
+                    (matched_track_full.energy if hasattr(matched_track_full, "energy") else None)
+                    or (matched_track_full.get("energy") if isinstance(matched_track_full, dict) else None)
+                    or 5
+                )
+                def _modifier_score(t: dict) -> float:
+                    e = float(t.get("energy") or source_energy)
+                    sim = t.get("_relevance_score", 0.5)
+                    # Direction keywords → energy delta scoring
+                    if any(k in modifier for k in ("higher energy", "more energy", "harder", "faster", "bigger")):
+                        energy_score = (e - source_energy) / 10.0  # positive = higher energy
+                    elif any(k in modifier for k in ("lower energy", "less energy", "softer", "slower", "calmer", "chilled")):
+                        energy_score = (source_energy - e) / 10.0  # positive = lower energy
+                    elif any(k in modifier for k in ("darker", "heavier", "deeper")):
+                        energy_score = (e - source_energy) / 10.0
+                    elif any(k in modifier for k in ("lighter", "brighter", "melodic")):
+                        energy_score = (source_energy - e) / 10.0
+                    else:
+                        energy_score = 0.0
+                    # Blend: 60% embedding similarity, 40% modifier direction
+                    return sim * 0.6 + energy_score * 0.4
+
+                similar_raw = sorted(similar_raw, key=_modifier_score, reverse=True)
+                similar_raw = similar_raw[:track_count]
+                logger.info(f"🎛️ Modifier '{modifier}' applied — re-ranked {len(similar_raw)} tracks")
 
             similar_tracks = [
                 TrackResult(
@@ -305,7 +327,8 @@ async def search(req: SearchRequest):
                 track_count=len(tracks),
                 reasoning=(
                     f"Found '{best.get('title')}' by {best.get('artist')}. "
-                    f"Showing the track + {len(similar_tracks)} similar."
+                    + (f"Re-ranked for '{modifier}'. " if modifier else "")
+                    + f"Showing the track + {len(similar_tracks)} similar."
                 ),
                 confidence=best.get("match_score", 0.85),
                 model_used=params.get("model_used", "embedding similarity"),

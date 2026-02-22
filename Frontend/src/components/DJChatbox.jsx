@@ -508,8 +508,8 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
       {isOpen && (
         <div style={{
           position: 'fixed', bottom: 24, left: 24, zIndex: 1001,
-          width: 700,
-          maxHeight: isMinimised ? 46 : '90vh',
+          width: 520,
+          maxHeight: isMinimised ? 60 : '95vh',
           display: 'flex', flexDirection: 'column',
           background: 'rgba(3, 6, 8, 0.97)',
           border: '1px solid #00ffff33',
@@ -526,7 +526,7 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
             onClick={() => setIsMinimised(v => !v)}
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '10px 14px', flexShrink: 0,
+              padding: '14px 18px', flexShrink: 0,
               background: 'linear-gradient(90deg, #001414, #000a0a)',
               borderBottom: isMinimised ? 'none' : '1px solid #001a1a',
               cursor: 'pointer', userSelect: 'none',
@@ -534,12 +534,12 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <div style={{
-                width: 7, height: 7, borderRadius: '50%',
+                width: 9, height: 9, borderRadius: '50%',
                 background: isBusy ? '#ffaa00' : '#00ff88',
                 boxShadow: isBusy ? '0 0 8px #ffaa00' : '0 0 8px #00ff88',
                 animation: isBusy ? 'blink 0.7s ease-in-out infinite' : 'none',
               }} />
-              <span style={{ fontSize: 11, color: '#00ffff', fontWeight: 700, letterSpacing: '0.1em' }}>
+              <span style={{ fontSize: 14, color: '#00ffff', fontWeight: 700, letterSpacing: '0.1em' }}>
                 DJMATE SEMANTIC SEARCH
               </span>
             </div>
@@ -559,8 +559,8 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
             }}>
 
               {/* -- Input area -- */}
-              <div style={{ padding: '12px 14px', borderBottom: '1px solid #001010', flexShrink: 0 }}>
-                <div style={{ fontSize: 10, color: '#00ffff55', marginBottom: 6, letterSpacing: '0.08em' }}>
+              <div style={{ padding: '16px 18px', borderBottom: '1px solid #001010', flexShrink: 0 }}>
+                <div style={{ fontSize: 13, color: '#00ffff55', marginBottom: 10, letterSpacing: '0.08em' }}>
                   DESCRIBE WHAT YOU WANT TO PLAY NEXT
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -578,8 +578,8 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
                       border: '1px solid #00ffff22',
                       borderRadius: 8,
                       color: '#aae8e8',
-                      fontSize: 12,
-                      padding: '8px 10px',
+                      fontSize: 14,
+                      padding: '10px 12px',
                       fontFamily: 'inherit',
                       resize: 'none',
                       outline: 'none',

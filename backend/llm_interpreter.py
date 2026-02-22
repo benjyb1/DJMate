@@ -254,6 +254,7 @@ OUTPUT — valid JSON only:
 {{
   "intent": "find_similar_track" | "vibe_genre_search" | "transition_from_current",
   "track_name": "<name of track/artist if intent is find_similar_track, else null>",
+  "modifier": "<any energy/vibe direction modifier from the query, e.g. 'higher energy', 'darker', 'faster', 'more melodic', or null if none>",
   "reasoning": "<one sentence>"
 }}"""
 
@@ -301,15 +302,19 @@ OUTPUT — valid JSON only:
         m = re.search(r'\b(\d+)\s*(?:track|song|result|tune)s?\b', query.lower())
         track_count = max(1, int(m.group(1))) if m else 7
 
+        modifier = (intent_result.get("modifier") or "").strip() or None
+
         return {
             "intent": "find_similar_track",
             "track_name": track_name,
             "track_candidates": candidates,
             "track_count": track_count,
+            "modifier": modifier,
             "confidence": 0.95 if candidates else 0.3,
             "reasoning": (
-                f"Looking for tracks similar to '{track_name}'. "
-                f"Found {len(candidates)} candidate match(es) in library."
+                f"Looking for tracks similar to '{track_name}'"
+                + (f" ({modifier})" if modifier else "")
+                + f". Found {len(candidates)} candidate match(es) in library."
                 if candidates
                 else f"Could not find '{track_name}' in the library."
             ),

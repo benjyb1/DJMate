@@ -9,7 +9,7 @@ Values:
   'auto_reviewed' — was auto-tagged, then a human confirmed/edited it in Tagger.py
 
 Run once:
-  python Scripts/Backend/migrate_add_tag_source.py
+  python backend/migrate_add_tag_source.py
 """
 
 import os

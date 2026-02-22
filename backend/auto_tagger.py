@@ -16,9 +16,9 @@ Safety:
   - Dry-run mode (--dry-run flag) prints what would be written without touching DB
 
 Usage:
-  python Scripts/Backend/auto_tagger.py               # tag all untagged
-  python Scripts/Backend/auto_tagger.py --dry-run     # preview only
-  python Scripts/Backend/auto_tagger.py --min-sim 0.8 # stricter threshold
+  python backend/auto_tagger.py               # tag all untagged
+  python backend/auto_tagger.py --dry-run     # preview only
+  python backend/auto_tagger.py --min-sim 0.8 # stricter threshold
 """
 
 import os
