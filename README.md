@@ -21,7 +21,7 @@ Overview of the dashboard
 You can request similar sounding tracks  
 <img src="screenshots/3d-zoomed.png" width="800">
 
-Ask it for a certain vibe &nbsp;&nbsp;&nbsp; Let it take your set in any direction
+Ask it for a certain vibe, or let it take your set in any direction
 
 <p float="left">
   <img src="screenshots/chat-vibe.png" width="400">
