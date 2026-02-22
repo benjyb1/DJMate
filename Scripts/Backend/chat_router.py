@@ -14,6 +14,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 import logging
+import numpy as np
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +29,10 @@ _db          = None
 def _get_db():
     global _db
     if _db is None:
-        from Backend.data.db_interface import DatabaseManager
+        try:
+            from Scripts.Backend.data.db_interface import DatabaseManager
+        except ImportError:
+            from Backend.data.db_interface import DatabaseManager
         _db = DatabaseManager(enable_caching=True, pool_size=10)
     return _db
 
@@ -35,7 +40,10 @@ def _get_db():
 async def _get_interpreter():
     global _interpreter
     if _interpreter is None:
-        from Backend.llm_interpreter import SemanticInterpreter
+        try:
+            from Scripts.Backend.llm_interpreter import SemanticInterpreter
+        except ImportError:
+            from Backend.llm_interpreter import SemanticInterpreter
         db = _get_db()
         _interpreter = SemanticInterpreter(supabase_client=db.client)
         await _interpreter.initialize()
@@ -46,6 +54,7 @@ async def _get_interpreter():
 
 class InterpretRequest(BaseModel):
     query: str
+    current_track: Optional[Dict[str, Any]] = None  # currently playing track context
 
 
 class InterpretResponse(BaseModel):
@@ -70,6 +79,17 @@ class TrackResult(BaseModel):
     inferred:         Optional[bool]      = False
 
 
+class TrackCandidate(BaseModel):
+    """A fuzzy-matched track name result for find_similar_track intent."""
+    trackid:     str
+    title:       str
+    artist:      str
+    bpm:         Optional[float] = None
+    key:         Optional[str]   = None
+    match_score: float
+    match_field: str
+
+
 class SearchResponse(BaseModel):
     tracks:           List[TrackResult]
     relaxation_step:  int
@@ -79,6 +99,86 @@ class SearchResponse(BaseModel):
     reasoning:        str
     confidence:       float
     model_used:       str
+    intent:           str = "vibe_genre_search"
+    # find_similar_track only
+    track_candidates: Optional[List[TrackCandidate]] = None
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _parse_embedding(emb):
+    if emb is None:
+        return None
+    if isinstance(emb, list):
+        return [float(x) for x in emb]
+    if isinstance(emb, str):
+        try:
+            parsed = json.loads(emb)
+            if isinstance(parsed, list):
+                return [float(x) for x in parsed]
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
+
+
+async def _embedding_search_for_track(db, track_id: str, limit: int) -> List[Dict[str, Any]]:
+    """Run embedding similarity search for a given trackid. Returns plain dicts."""
+    source = await db.get_track_by_id(track_id)
+    if not source:
+        return []
+
+    raw_emb = source.embedding if hasattr(source, "embedding") else (
+        source.get("embedding") if isinstance(source, dict) else None
+    )
+    source_emb = _parse_embedding(raw_emb)
+    if not source_emb:
+        return []
+
+    raw = await db.find_similar_tracks(
+        query_embedding=source_emb,
+        limit=limit + 1,
+        threshold=0.2,
+    )
+
+    results = []
+    for r in raw:
+        rid = str(r.get("id") or r.get("trackid") or "")
+        if rid == str(track_id):
+            continue
+
+        full = await db.get_track_by_id(rid)
+        if not full:
+            continue
+
+        sim = float(r.get("similarity", 0.5))
+        target_raw = full.embedding if hasattr(full, "embedding") else (
+            full.get("embedding") if isinstance(full, dict) else None
+        )
+        target_emb = _parse_embedding(target_raw)
+        if target_emb and source_emb:
+            a = np.array(source_emb, dtype=np.float32)
+            b = np.array(target_emb, dtype=np.float32)
+            na, nb = np.linalg.norm(a), np.linalg.norm(b)
+            if na and nb:
+                sim = float(np.dot(a, b) / (na * nb))
+
+        results.append({
+            "trackid":        str(full.trackid if hasattr(full, "trackid") else rid),
+            "title":          full.title if hasattr(full, "title") else "Unknown",
+            "artist":         full.artist if hasattr(full, "artist") else "Unknown",
+            "bpm":            full.bpm if hasattr(full, "bpm") else None,
+            "key":            full.key if hasattr(full, "key") else None,
+            "energy":         full.energy if hasattr(full, "energy") else None,
+            "semantic_tags":  full.semantic_tags if hasattr(full, "semantic_tags") else [],
+            "vibe_descriptors": full.vibe_descriptors if hasattr(full, "vibe_descriptors") else [],
+            "_relevance_score": round(sim, 4),
+            "_inferred":      False,
+        })
+        if len(results) >= limit:
+            break
+
+    results.sort(key=lambda x: x["_relevance_score"], reverse=True)
+    return results
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -87,14 +187,23 @@ class SearchResponse(BaseModel):
 async def interpret(req: InterpretRequest):
     """
     Parse a free-text DJ query into structured search parameters.
-    Mirrors: params = run_async(interpreter.interpret(query_input.strip()))
+    Now includes intent classification and current_track context.
     """
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
     try:
+        from Scripts.Backend.llm_interpreter import InterpretationContext
+    except ImportError:
+        from Backend.llm_interpreter import InterpretationContext
+
+    context = None
+    if req.current_track:
+        context = InterpretationContext(current_track=req.current_track)
+
+    try:
         interp = await _get_interpreter()
-        params = await interp.interpret(req.query.strip())
+        params = await interp.interpret(req.query.strip(), context=context)
         return InterpretResponse(params=params)
     except Exception as e:
         logger.error(f"Interpret error: {e}")
@@ -104,19 +213,123 @@ async def interpret(req: InterpretRequest):
 @router.post("/search", response_model=SearchResponse)
 async def search(req: SearchRequest):
     """
-    Run the full semantic search pipeline and return enriched tracks.
-    Mirrors: tracks, meta = run_async(interpreter.search(params, db_manager=db))
+    Run the full search pipeline.
+
+    Routes based on intent:
+    - find_similar_track: uses embedding similarity on the best candidate match
+    - vibe_genre_search / transition_from_current: uses the tag-scoring pipeline
     """
     try:
         interp = await _get_interpreter()
         db     = _get_db()
+        params = req.params
+        intent = params.get("intent", "vibe_genre_search")
 
-        tracks_raw, meta = await interp.search(req.params, db_manager=db)
+        # ── find_similar_track path ───────────────────────────────────────────
+        if intent == "find_similar_track":
+            candidates = params.get("track_candidates") or []
+            track_count = max(1, int(params.get("track_count", 7)))
 
-        tracks = []
-        for t in tracks_raw:
-            tracks.append(TrackResult(
-                trackid=          t.get("trackid") or t.get("id"),
+            if not candidates:
+                # No candidates found — return empty with explanation
+                return SearchResponse(
+                    tracks=[],
+                    relaxation_step=0,
+                    relaxation_label="track not found",
+                    inferred_count=0,
+                    track_count=track_count,
+                    reasoning=params.get("reasoning", "No matching track found in library."),
+                    confidence=params.get("confidence", 0.0),
+                    model_used=params.get("model_used", "intent-classifier"),
+                    intent=intent,
+                    track_candidates=[],
+                )
+
+            # Use the top candidate (highest match_score) for embedding search
+            best = candidates[0]
+            best_id = best.get("trackid", "")
+            logger.info(
+                f"🎵 find_similar_track → '{best.get('title')}' by {best.get('artist')} "
+                f"(match_score={best.get('match_score', 0):.2f})"
+            )
+
+            # Fetch the matched track itself to put it first in results
+            matched_track_full = await db.get_track_by_id(best_id)
+
+            similar_raw = await _embedding_search_for_track(db, best_id, track_count)
+
+            # Build the matched track as the first result (relevance_score=1.0)
+            matched_result = None
+            if matched_track_full:
+                def _attr(obj, key, default=None):
+                    return getattr(obj, key, None) if hasattr(obj, key) else (
+                        obj.get(key, default) if isinstance(obj, dict) else default
+                    )
+                matched_result = TrackResult(
+                    trackid=          str(_attr(matched_track_full, "trackid", best_id)),
+                    title=            _attr(matched_track_full, "title", best.get("title", "Unknown")),
+                    artist=           _attr(matched_track_full, "artist", best.get("artist", "Unknown")),
+                    bpm=              _attr(matched_track_full, "bpm"),
+                    key=              _attr(matched_track_full, "key"),
+                    energy=           _attr(matched_track_full, "energy"),
+                    filepath=         _attr(matched_track_full, "filepath"),
+                    semantic_tags=    _attr(matched_track_full, "semantic_tags") or [],
+                    vibe_descriptors= _attr(matched_track_full, "vibe_descriptors") or [],
+                    relevance_score=  1.0,
+                    inferred=         False,
+                )
+
+            similar_tracks = [
+                TrackResult(
+                    trackid=          t["trackid"],
+                    title=            t.get("title", "Unknown"),
+                    artist=           t.get("artist", "Unknown"),
+                    bpm=              t.get("bpm"),
+                    key=              t.get("key"),
+                    energy=           t.get("energy"),
+                    semantic_tags=    t.get("semantic_tags") or [],
+                    vibe_descriptors= t.get("vibe_descriptors") or [],
+                    relevance_score=  t.get("_relevance_score", 0.5),
+                    inferred=         False,
+                )
+                for t in similar_raw
+            ]
+
+            tracks = ([matched_result] if matched_result else []) + similar_tracks
+
+            return SearchResponse(
+                tracks=tracks,
+                relaxation_step=0,
+                relaxation_label="exact match + similar",
+                inferred_count=0,
+                track_count=len(tracks),
+                reasoning=(
+                    f"Found '{best.get('title')}' by {best.get('artist')}. "
+                    f"Showing the track + {len(similar_tracks)} similar."
+                ),
+                confidence=best.get("match_score", 0.85),
+                model_used=params.get("model_used", "embedding similarity"),
+                intent=intent,
+                track_candidates=[
+                    TrackCandidate(
+                        trackid=    c.get("trackid", ""),
+                        title=      c.get("title", ""),
+                        artist=     c.get("artist", ""),
+                        bpm=        c.get("bpm"),
+                        key=        c.get("key"),
+                        match_score=c.get("match_score", 0.0),
+                        match_field=c.get("match_field", ""),
+                    )
+                    for c in candidates
+                ],
+            )
+
+        # ── vibe_genre_search / transition_from_current path ─────────────────
+        tracks_raw, meta = await interp.search(params, db_manager=db)
+
+        tracks = [
+            TrackResult(
+                trackid=          str(t.get("trackid") or t.get("id") or ""),
                 title=            t.get("title",   "Unknown"),
                 artist=           t.get("artist",  "Unknown"),
                 bpm=              t.get("bpm"),
@@ -127,17 +340,20 @@ async def search(req: SearchRequest):
                 vibe_descriptors= t.get("vibe_descriptors") or t.get("vibe") or [],
                 relevance_score=  t.get("_relevance_score", 0.5),
                 inferred=         t.get("_inferred", False),
-            ))
+            )
+            for t in tracks_raw
+        ]
 
         return SearchResponse(
             tracks=           tracks,
             relaxation_step=  meta.get("relaxation_step",  0),
             relaxation_label= meta.get("relaxation_label", ""),
             inferred_count=   meta.get("inferred_count",   0),
-            track_count=      req.params.get("track_count", len(tracks)),
-            reasoning=        req.params.get("reasoning",  ""),
-            confidence=       req.params.get("confidence", 0.0),
-            model_used=       req.params.get("model_used", "fallback"),
+            track_count=      params.get("track_count", len(tracks)),
+            reasoning=        params.get("reasoning",  ""),
+            confidence=       params.get("confidence", 0.0),
+            model_used=       params.get("model_used", "fallback"),
+            intent=           intent,
         )
 
     except Exception as e:

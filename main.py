@@ -1,8 +1,17 @@
+'''
+Run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+'''
+
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import asyncio
+import os
+import json
+import numpy as np
 
 from Scripts.Backend.llm_interpreter import SemanticInterpreter
 from Scripts.Backend.reccomender import DJRecommendationEngine
@@ -46,10 +55,10 @@ class CrateOperation(BaseModel):
 db_manager = DatabaseManager()
 embedding_index = None
 semantic_interpreter = SemanticInterpreter(
-    db_manager=db_manager
+    supabase_client=db_manager.client
 )
 recommendation_engine = DJRecommendationEngine(
-    db_manager=db_manager,
+    db_interface=db_manager,
     embedding_index=None
 )
 
@@ -155,6 +164,46 @@ async def get_all_tracks(
         raise HTTPException(status_code=500, detail=f"Failed to fetch tracks: {str(e)}")
 
 
+@app.get("/tracks/resolve")
+async def resolve_track(q: str):
+    """
+    Fuzzy-match a track name/artist string to a trackid.
+    Used by the chatbox to resolve 'similar to Song X' queries.
+    Must be defined BEFORE /tracks/{track_id} routes so FastAPI doesn't
+    capture 'resolve' as a track_id.
+    """
+    try:
+        if not db_manager.client or not q.strip():
+            return {"match": None}
+
+        search = q.strip().lower()
+
+        # Search by title (ilike = case-insensitive)
+        resp = db_manager.client.table("tracks") \
+            .select("trackid, title, artist") \
+            .ilike("title", f"%{search}%") \
+            .limit(5) \
+            .execute()
+
+        if resp.data:
+            return {"match": resp.data[0]}
+
+        # Fallback: search by artist
+        resp = db_manager.client.table("tracks") \
+            .select("trackid, title, artist") \
+            .ilike("artist", f"%{search}%") \
+            .limit(5) \
+            .execute()
+
+        if resp.data:
+            return {"match": resp.data[0]}
+
+        return {"match": None}
+
+    except Exception as e:
+        return {"match": None}
+
+
 @app.get("/tracks/{track_id}/neighbors")
 async def get_track_neighbors(track_id: str, limit: int = 8):
     """
@@ -195,6 +244,160 @@ async def get_track_neighbors(track_id: str, limit: int = 8):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch neighbors: {str(e)}")
+
+
+@app.get("/tracks/{track_id}/audio")
+async def get_track_audio(track_id: str):
+    """Stream audio file for a given track. Used by the React frontend."""
+    try:
+        # Query Supabase directly to avoid stale cache in db_manager
+        _direct = db_manager.client.table("tracks").select("filepath").eq("trackid", track_id).single().execute()
+        filepath = (_direct.data or {}).get("filepath") if _direct.data else None
+
+        if not filepath:
+            raise HTTPException(status_code=404, detail="No filepath for this track")
+
+        if not os.path.isfile(filepath):
+            raise HTTPException(status_code=404, detail="Audio file not found on disk")
+
+        ext = os.path.splitext(filepath)[1].lower()
+        media_types = {
+            '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.flac': 'audio/flac',
+            '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4',
+            '.aiff': 'audio/aiff', '.aif': 'audio/aiff',
+        }
+
+        return FileResponse(
+            path=filepath,
+            media_type=media_types.get(ext, 'audio/mpeg'),
+            filename=os.path.basename(filepath),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to serve audio: {str(e)}")
+
+
+def _parse_embedding(emb):
+    """Parse embedding that may be a string, list, or None. Returns list of floats or None."""
+    if emb is None:
+        return None
+    if isinstance(emb, list):
+        return [float(x) for x in emb]
+    if isinstance(emb, str):
+        try:
+            parsed = json.loads(emb)
+            if isinstance(parsed, list):
+                return [float(x) for x in parsed]
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
+
+
+@app.get("/tracks/{track_id}/similar")
+async def get_similar_tracks(track_id: str, limit: int = 7):
+    """
+    Embedding-based similarity search — same logic as streamSimilar.py Tab 1.
+    Returns tracks ranked by cosine similarity of their embeddings.
+    """
+    try:
+        # 1. Get source track (includes embedding via select *)
+        source = await db_manager.get_track_by_id(track_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Track not found")
+
+        raw_emb = source.embedding if hasattr(source, 'embedding') else (
+            source.get('embedding') if isinstance(source, dict) else None
+        )
+        source_embedding = _parse_embedding(raw_emb)
+        if not source_embedding:
+            raise HTTPException(status_code=404, detail="Track has no embedding")
+
+        # 2. Find similar via Supabase RPC (match_tracks) — same as streamSimilar.py
+        raw = await db_manager.find_similar_tracks(
+            query_embedding=source_embedding,
+            limit=limit + 1,
+            threshold=0.2
+        )
+
+        # 3. Filter out source, enrich with full data, compute cosine similarity
+        similar = []
+        for r in raw:
+            rid = str(r.get("id") or r.get("trackid") or "")
+            if rid == str(track_id):
+                continue
+
+            # Get full track data
+            full = await db_manager.get_track_by_id(rid)
+            if not full:
+                continue
+
+            # Cosine similarity (same as streamSimilar.py)
+            sim = float(r.get("similarity", 0.5))
+            target_raw = full.embedding if hasattr(full, 'embedding') else (
+                full.get('embedding') if isinstance(full, dict) else None
+            )
+            target_emb = _parse_embedding(target_raw)
+            if target_emb and source_embedding:
+                a = np.array(source_embedding, dtype=np.float32)
+                b = np.array(target_emb, dtype=np.float32)
+                na, nb = np.linalg.norm(a), np.linalg.norm(b)
+                if na and nb:
+                    sim = float(np.dot(a, b) / (na * nb))
+
+            # Extract labels
+            tags = []
+            energy = 0.5
+            vibes = []
+            if hasattr(full, 'semantic_tags') and full.semantic_tags:
+                tags = full.semantic_tags
+            if hasattr(full, 'energy') and full.energy is not None:
+                energy = full.energy
+            if hasattr(full, 'vibe_descriptors') and full.vibe_descriptors:
+                vibes = full.vibe_descriptors
+
+            similar.append({
+                "trackid": str(full.trackid if hasattr(full, 'trackid') else rid),
+                "title": full.title if hasattr(full, 'title') else "Unknown",
+                "artist": full.artist if hasattr(full, 'artist') else "Unknown",
+                "bpm": full.bpm if hasattr(full, 'bpm') else None,
+                "key": full.key if hasattr(full, 'key') else None,
+                "energy": energy,
+                "semantic_tags": tags,
+                "vibe_descriptors": vibes,
+                "relevance_score": round(sim, 4),
+            })
+
+            if len(similar) >= limit:
+                break
+
+        # Sort by similarity descending
+        similar.sort(key=lambda x: x["relevance_score"], reverse=True)
+
+        # Source track info for direction badges
+        source_info = {
+            "trackid": str(source.trackid if hasattr(source, 'trackid') else track_id),
+            "title": source.title if hasattr(source, 'title') else "Unknown",
+            "artist": source.artist if hasattr(source, 'artist') else "Unknown",
+            "bpm": source.bpm if hasattr(source, 'bpm') else None,
+            "key": source.key if hasattr(source, 'key') else None,
+            "energy": source.energy if hasattr(source, 'energy') else 0.5,
+            "semantic_tags": source.semantic_tags if hasattr(source, 'semantic_tags') else [],
+            "vibe_descriptors": source.vibe_descriptors if hasattr(source, 'vibe_descriptors') else [],
+        }
+
+        return {
+            "source": source_info,
+            "tracks": similar,
+            "track_count": len(similar),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Similar search failed: {str(e)}")
+
 
 # ── AI endpoints ──────────────────────────────────────────────────────────────
 

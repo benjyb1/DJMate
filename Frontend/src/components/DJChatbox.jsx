@@ -1,15 +1,20 @@
 // src/components/DJChatbox.jsx
 // Replicates the "Describe what you want" tab from streamSimilar.py.
-// Uses apiClient (/chat/interpret → /chat/search) for all backend calls.
+// Uses apiClient (/chat/interpret -> /chat/search) for all backend calls.
 //
 // Props:
 //   selectedTrack — node object from the 3D graph (optional context)
 //   trackCount    — total number of tracks loaded
+//   onTrackSelect — callback(trackid) to fly the 3D camera to a track
+// Ref:
+//   openAndSearch(queryText) — programmatically open and run a search
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { apiClient } from '../api/apiClient';
 
-// ── Utility: direction badge (mirrors describe_direction() in streamSimilar.py) ─
+const API_BASE = 'http://localhost:8000';
+
+// -- Utility: direction badge (mirrors describe_direction() in streamSimilar.py) --
 function describeDirection(source, candidate) {
   const clues = [];
 
@@ -41,7 +46,7 @@ function describeDirection(source, candidate) {
   return moreClue || clues[0];
 }
 
-// ── SimBar ─────────────────────────────────────────────────────────────────────
+// -- SimBar --
 function SimBar({ score }) {
   const pct   = Math.round(score * 100);
   const color = score > 0.7 ? '#00ff88' : score > 0.4 ? '#ffaa00' : '#ff4444';
@@ -53,8 +58,8 @@ function SimBar({ score }) {
   );
 }
 
-// ── TrackCard (mirrors result-card in streamSimilar.py) ────────────────────────
-function TrackCard({ rank, track, score, source }) {
+// -- TrackCard (mirrors result-card in streamSimilar.py) --
+function TrackCard({ rank, track, score, source, onClick, onFindSimilar }) {
   const [audioError, setAudioError] = useState(false);
   const direction = source ? describeDirection(source, track) : null;
 
@@ -65,6 +70,7 @@ function TrackCard({ rank, track, score, source }) {
 
   return (
     <div
+      onClick={() => onClick?.(track.trackid)}
       style={{
         display: 'grid', gridTemplateColumns: '1fr auto',
         gap: 10, alignItems: 'center',
@@ -73,12 +79,13 @@ function TrackCard({ rank, track, score, source }) {
         borderRadius: 10,
         padding: '12px 14px',
         marginBottom: 4,
+        cursor: onClick ? 'pointer' : 'default',
         transition: 'border-color 0.15s',
       }}
       onMouseEnter={e => e.currentTarget.style.borderColor = '#333'}
       onMouseLeave={e => e.currentTarget.style.borderColor = '#1e1e1e'}
     >
-      {/* ── Left: info ─────────────────────────────────────────────────── */}
+      {/* -- Left: info -- */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
         <div style={{ fontSize: 26, color: '#222', fontWeight: 900, lineHeight: 1, minWidth: 28, fontFamily: 'monospace' }}>
           {rank}
@@ -92,7 +99,7 @@ function TrackCard({ rank, track, score, source }) {
           </div>
           {metaParts.length > 0 && (
             <div style={{ fontSize: 10, color: '#555', marginTop: 5 }}>
-              {metaParts.join(' · ')}
+              {metaParts.join(' . ')}
             </div>
           )}
 
@@ -115,33 +122,54 @@ function TrackCard({ rank, track, score, source }) {
               <span style={{
                 background: '#111100', color: '#aaaa00', border: '1px solid #333300',
                 borderRadius: 8, padding: '2px 7px', fontSize: 10,
-              }}>🔮 inferred</span>
+              }}>inferred</span>
             )}
             {direction && (
               <span style={{
                 background: `${direction.color}18`, color: direction.color,
                 border: `1px solid ${direction.color}55`,
                 borderRadius: 10, padding: '2px 8px', fontSize: 10, fontWeight: 600,
-              }}>↗ {direction.label}</span>
+              }}>{direction.label}</span>
             )}
           </div>
+
+          {/* Find Similar button on each card */}
+          {onFindSimilar && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation(); // Don't trigger the card's onClick
+                onFindSimilar(track.trackid);
+              }}
+              style={{
+                marginTop: 5, padding: '2px 8px',
+                background: '#0a0a1a', color: '#cc88ff',
+                border: '1px solid #cc88ff44',
+                borderRadius: 8, fontSize: 10, cursor: 'pointer',
+                fontFamily: 'inherit', transition: 'border-color 0.15s',
+              }}
+              onMouseEnter={e => { e.target.style.borderColor = '#cc88ff'; }}
+              onMouseLeave={e => { e.target.style.borderColor = '#cc88ff44'; }}
+            >
+              Find Similar
+            </button>
+          )}
 
           <SimBar score={score} />
         </div>
       </div>
 
-      {/* ── Right: audio ───────────────────────────────────────────────── */}
+      {/* -- Right: audio (served through FastAPI backend) -- */}
       <div style={{ minWidth: 140 }}>
-        {track.filepath && !audioError ? (
+        {track.trackid && !audioError ? (
           <audio
             controls
-            src={track.filepath}
+            src={`${API_BASE}/tracks/${track.trackid}/audio`}
             onError={() => setAudioError(true)}
             style={{ width: 140, height: 32, accentColor: '#00ffff' }}
           />
         ) : (
           <div style={{ fontSize: 10, color: '#333', textAlign: 'center' }}>
-            {track.filepath ? '⚠ file not found' : '—'}
+            {track.trackid ? 'audio unavailable' : '-'}
           </div>
         )}
       </div>
@@ -149,21 +177,77 @@ function TrackCard({ rank, track, score, source }) {
   );
 }
 
-// ── SearchResults ──────────────────────────────────────────────────────────────
-function SearchResults({ result, source }) {
+// -- CandidateBar: shows alternate track matches for find_similar_track --
+function CandidateBar({ candidates, onSelect }) {
+  if (!candidates || candidates.length <= 1) return null;
+  return (
+    <div style={{
+      background: '#080814', border: '1px solid #2a2a55',
+      borderRadius: 8, padding: '8px 12px', marginBottom: 10,
+    }}>
+      <div style={{ fontSize: 10, color: '#5555bb', marginBottom: 6, letterSpacing: '0.08em' }}>
+        DID YOU MEAN ONE OF THESE?
+      </div>
+      {candidates.slice(1).map((c, i) => (
+        <div
+          key={c.trackid}
+          onClick={() => onSelect(c.trackid, c.title)}
+          style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '4px 0', cursor: 'pointer', borderBottom: i < candidates.length - 2 ? '1px solid #111122' : 'none',
+          }}
+          onMouseEnter={e => e.currentTarget.style.opacity = '0.7'}
+          onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+        >
+          <div>
+            <span style={{ fontSize: 12, color: '#aaa' }}>{c.title}</span>
+            <span style={{ fontSize: 10, color: '#555', marginLeft: 8 }}>{c.artist}</span>
+          </div>
+          <span style={{ fontSize: 10, color: '#3333aa', marginLeft: 8 }}>
+            {Math.round(c.match_score * 100)}% match
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// -- SearchResults --
+function SearchResults({ result, source, onTrackClick, onFindSimilar, onCandidateSelect }) {
   if (!result) return null;
+
+  const isTrackSearch = result.intent === 'find_similar_track';
 
   return (
     <div style={{ marginTop: 12 }}>
 
+      {/* Track-not-found notice */}
+      {isTrackSearch && result.tracks.length === 0 && (
+        <div style={{
+          background: '#110005', border: '1px solid #440022',
+          borderRadius: 8, padding: '10px 12px', marginBottom: 10,
+          fontSize: 11, color: '#ff6688',
+        }}>
+          {result.reasoning || "Couldn't find that track in the library."}
+          <div style={{ fontSize: 10, color: '#663344', marginTop: 4 }}>
+            Try the track's full name, or use the vibe/genre search instead.
+          </div>
+        </div>
+      )}
+
+      {/* Alternate candidates for find_similar_track */}
+      {isTrackSearch && result.track_candidates && (
+        <CandidateBar candidates={result.track_candidates} onSelect={onCandidateSelect} />
+      )}
+
       {/* Relaxation notice */}
-      {result.relaxation_step > 0 && (
+      {!isTrackSearch && result.relaxation_step > 0 && (
         <div style={{
           background: '#110a00', border: '1px solid #443300',
           borderRadius: 8, padding: '7px 12px', marginBottom: 10,
           fontSize: 11, color: '#cc9900',
         }}>
-          ⚡ Widened search ({result.relaxation_label})
+          Widened search ({result.relaxation_label})
         </div>
       )}
       {result.inferred_count > 0 && (
@@ -172,39 +256,55 @@ function SearchResults({ result, source }) {
           borderRadius: 8, padding: '7px 12px', marginBottom: 10,
           fontSize: 11, color: '#cc9900',
         }}>
-          🔮 {result.inferred_count} track(s) inferred by sound similarity
+          {result.inferred_count} track(s) inferred by sound similarity
         </div>
       )}
 
       {/* Summary line */}
-      <div style={{ fontSize: 11, color: '#666', marginBottom: 10 }}>
-        <span style={{ color: '#aaa', fontWeight: 600 }}>{result.tracks.length} tracks</span>
-        {result.reasoning && (
-          <span> · <em style={{ color: '#888' }}>{result.reasoning}</em></span>
-        )}
-        {result.confidence > 0 && (
-          <span> · confidence <span style={{ color: '#00ffcc' }}>{Math.round(result.confidence * 100)}%</span></span>
-        )}
-        {result.model_used && (
-          <span> · <code style={{ background: '#0a0a0a', padding: '1px 5px', borderRadius: 3, fontSize: 10, color: '#555' }}>{result.model_used}</code></span>
-        )}
-      </div>
+      {result.tracks.length > 0 && (
+        <div style={{ fontSize: 11, color: '#666', marginBottom: 10 }}>
+          <span style={{ color: '#aaa', fontWeight: 600 }}>{result.tracks.length} tracks</span>
+          {result.reasoning && (
+            <span> . <em style={{ color: '#888' }}>{result.reasoning}</em></span>
+          )}
+          {result.confidence > 0 && (
+            <span> . confidence <span style={{ color: '#00ffcc' }}>{Math.round(result.confidence * 100)}%</span></span>
+          )}
+          {result.model_used && (
+            <span> . <code style={{ background: '#0a0a0a', padding: '1px 5px', borderRadius: 3, fontSize: 10, color: '#555' }}>{result.model_used}</code></span>
+          )}
+        </div>
+      )}
 
       {/* Track cards */}
       {result.tracks.map((track, i) => (
-        <TrackCard
-          key={track.trackid || i}
-          rank={i + 1}
-          track={track}
-          score={track.relevance_score ?? 0.5}
-          source={source}
-        />
+        <React.Fragment key={track.trackid || i}>
+          {/* For find_similar_track: label the matched track and the similar section */}
+          {isTrackSearch && i === 0 && (
+            <div style={{ fontSize: 10, color: '#00ffcc', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>
+              Matched track
+            </div>
+          )}
+          {isTrackSearch && i === 1 && (
+            <div style={{ fontSize: 10, color: '#555', textTransform: 'uppercase', letterSpacing: 1, margin: '12px 0 6px' }}>
+              Similar tracks
+            </div>
+          )}
+          <TrackCard
+            rank={i + 1}
+            track={track}
+            score={track.relevance_score ?? 0.5}
+            source={isTrackSearch && i === 0 ? null : (isTrackSearch ? result.tracks[0] : source)}
+            onClick={onTrackClick}
+            onFindSimilar={onFindSimilar}
+          />
+        </React.Fragment>
       ))}
     </div>
   );
 }
 
-// ── Suggested quick prompts ────────────────────────────────────────────────────
+// -- Suggested quick prompts --
 const QUICK_PROMPTS = [
   'fast kicking house',
   'dark minimal techno 140',
@@ -212,8 +312,8 @@ const QUICK_PROMPTS = [
   'peak time euphoric',
 ];
 
-// ── Main DJChatbox ─────────────────────────────────────────────────────────────
-export default function DJChatbox({ selectedTrack, trackCount }) {
+// -- Main DJChatbox (forwardRef so App can call openAndSearch) --
+const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onTrackSelect }, ref) {
   const [isOpen,      setIsOpen]      = useState(false);
   const [isMinimised, setIsMinimised] = useState(false);
   const [query,       setQuery]       = useState('');
@@ -242,6 +342,34 @@ export default function DJChatbox({ selectedTrack, trackCount }) {
     }
   }, [selectedTrack]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // When the user clicks an alternate candidate from the CandidateBar
+  const handleCandidateSelect = useCallback(async (trackid, title) => {
+    setStatus('searching');
+    setResult(null);
+    setErrorMsg('');
+    try {
+      const res = await fetch(`${API_BASE}/tracks/${trackid}/similar?limit=7`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const searchResult = {
+        tracks: data.tracks || [],
+        relaxation_step: 0,
+        relaxation_label: 'embedding similarity',
+        inferred_count: 0,
+        reasoning: `Similar to ${data.source?.title || title} by ${data.source?.artist || 'unknown'}`,
+        confidence: 1.0,
+        model_used: 'embedding similarity',
+        intent: 'find_similar_track',
+      };
+      setResult(searchResult);
+      setHistory(prev => [{ query: `similar to ${title}`, result: searchResult }, ...prev.slice(0, 9)]);
+      setStatus('done');
+    } catch (err) {
+      setErrorMsg(err.message || 'Search failed');
+      setStatus('error');
+    }
+  }, []);
+
   const runSearch = useCallback(async (queryText) => {
     const q = (queryText || query).trim();
     if (!q) return;
@@ -251,12 +379,25 @@ export default function DJChatbox({ selectedTrack, trackCount }) {
     setErrorMsg('');
 
     try {
-      // Step 1 — interpret
-      const { params } = await apiClient.post('/chat/interpret', { query: q });
+      // Step 1 — interpret (pass current track for transition context)
+      const interpretPayload = { query: q };
+      if (selectedTrack) {
+        interpretPayload.current_track = {
+          trackid:         selectedTrack.id || selectedTrack.trackid,
+          title:           selectedTrack.name || selectedTrack.title,
+          artist:          selectedTrack.artist,
+          bpm:             selectedTrack.bpm,
+          key:             selectedTrack.key,
+          energy:          selectedTrack.energy,
+          semantic_tags:   selectedTrack.tags || [],
+          vibe_descriptors:selectedTrack.vibe || [],
+        };
+      }
+      const { params } = await apiClient.post('/chat/interpret', interpretPayload);
 
       setStatus('searching');
 
-      // Step 2 — search
+      // Step 2 — search (intent-aware)
       const searchResult = await apiClient.post('/chat/search', { params });
 
       setResult(searchResult);
@@ -267,7 +408,69 @@ export default function DJChatbox({ selectedTrack, trackCount }) {
       setErrorMsg(err.message || 'Unknown error');
       setStatus('error');
     }
-  }, [query]);
+  }, [query, selectedTrack]);
+
+  // Embedding-based "Find Similar" — calls the same logic as streamSimilar.py Tab 1
+  const runFindSimilar = useCallback(async (trackid) => {
+    if (!trackid) return;
+
+    setStatus('searching');
+    setResult(null);
+    setErrorMsg('');
+
+    try {
+      const res = await fetch(`${API_BASE}/tracks/${trackid}/similar?limit=7`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+
+      // Shape the response to match SearchResults expectations
+      const searchResult = {
+        tracks: data.tracks || [],
+        relaxation_step: 0,
+        relaxation_label: '',
+        inferred_count: 0,
+        reasoning: `Similar to ${data.source?.title || 'selected track'} by ${data.source?.artist || 'unknown'}`,
+        confidence: 1.0,
+        model_used: 'embedding similarity',
+      };
+
+      setResult(searchResult);
+      setHistory(prev => [{
+        query: `similar to ${data.source?.title || trackid}`,
+        result: searchResult,
+      }, ...prev.slice(0, 9)]);
+      setStatus('done');
+
+    } catch (err) {
+      setErrorMsg(err.message || 'Similar search failed');
+      setStatus('error');
+    }
+  }, []);
+
+  // Expose openAndSearch + openAndFindSimilar to parent via ref
+  useImperativeHandle(ref, () => ({
+    openAndSearch: (queryText) => {
+      setIsOpen(true);
+      setIsMinimised(false);
+      setQuery(queryText);
+      setTimeout(() => runSearch(queryText), 150);
+    },
+    openAndFindSimilar: (trackid) => {
+      setIsOpen(true);
+      setIsMinimised(false);
+      setQuery(`similar to track ${trackid}`);
+      setTimeout(() => runFindSimilar(trackid), 150);
+    },
+  }), [runSearch, runFindSimilar]);
+
+  // "Find Similar" from within the chat results — uses embedding similarity
+  const handleFindSimilarInChat = useCallback((trackid) => {
+    setQuery(`similar to track ${trackid}`);
+    runFindSimilar(trackid);
+  }, [runFindSimilar]);
 
   const handleKey = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -280,7 +483,7 @@ export default function DJChatbox({ selectedTrack, trackCount }) {
 
   return (
     <>
-      {/* ── Pulse beacon ──────────────────────────────────────────────────── */}
+      {/* -- Pulse beacon -- */}
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
@@ -301,12 +504,12 @@ export default function DJChatbox({ selectedTrack, trackCount }) {
         </button>
       )}
 
-      {/* ── Chat panel ────────────────────────────────────────────────────── */}
+      {/* -- Chat panel -- */}
       {isOpen && (
         <div style={{
           position: 'fixed', bottom: 24, left: 24, zIndex: 1001,
-          width: 380,
-          maxHeight: isMinimised ? 46 : '80vh',
+          width: 700,
+          maxHeight: isMinimised ? 46 : '90vh',
           display: 'flex', flexDirection: 'column',
           background: 'rgba(3, 6, 8, 0.97)',
           border: '1px solid #00ffff33',
@@ -318,7 +521,7 @@ export default function DJChatbox({ selectedTrack, trackCount }) {
           transition: 'max-height 0.25s cubic-bezier(0.4,0,0.2,1)',
         }}>
 
-          {/* ── Header ──────────────────────────────────────────────────── */}
+          {/* -- Header -- */}
           <div
             onClick={() => setIsMinimised(v => !v)}
             style={{
@@ -337,15 +540,15 @@ export default function DJChatbox({ selectedTrack, trackCount }) {
                 animation: isBusy ? 'blink 0.7s ease-in-out infinite' : 'none',
               }} />
               <span style={{ fontSize: 11, color: '#00ffff', fontWeight: 700, letterSpacing: '0.1em' }}>
-                DJMATE · SEMANTIC SEARCH
+                DJMATE SEMANTIC SEARCH
               </span>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span style={{ fontSize: 10, color: '#00ffff44' }}>{isMinimised ? '▲' : '▼'}</span>
+              <span style={{ fontSize: 10, color: '#00ffff44' }}>{isMinimised ? '\u25B2' : '\u25BC'}</span>
               <span
                 style={{ fontSize: 14, color: '#ff444455', cursor: 'pointer', padding: '0 2px' }}
                 onClick={e => { e.stopPropagation(); setIsOpen(false); }}
-              >✕</span>
+              >{'\u2715'}</span>
             </div>
           </div>
 
@@ -355,7 +558,7 @@ export default function DJChatbox({ selectedTrack, trackCount }) {
               scrollbarWidth: 'thin', scrollbarColor: '#00ffff18 transparent',
             }}>
 
-              {/* ── Input area ──────────────────────────────────────────── */}
+              {/* -- Input area -- */}
               <div style={{ padding: '12px 14px', borderBottom: '1px solid #001010', flexShrink: 0 }}>
                 <div style={{ fontSize: 10, color: '#00ffff55', marginBottom: 6, letterSpacing: '0.08em' }}>
                   DESCRIBE WHAT YOU WANT TO PLAY NEXT
@@ -403,7 +606,7 @@ export default function DJChatbox({ selectedTrack, trackCount }) {
                       alignSelf: 'stretch',
                     }}
                   >
-                    {isBusy ? '…' : '↑'}
+                    {isBusy ? '\u2026' : '\u2191'}
                   </button>
                 </div>
 
@@ -427,7 +630,7 @@ export default function DJChatbox({ selectedTrack, trackCount }) {
                 </div>
               </div>
 
-              {/* ── Status / spinner ────────────────────────────────────── */}
+              {/* -- Status / spinner -- */}
               {isBusy && (
                 <div style={{
                   padding: '14px 18px',
@@ -439,30 +642,36 @@ export default function DJChatbox({ selectedTrack, trackCount }) {
                     border: '2px solid #001a1a', borderTop: '2px solid #00ffff',
                     animation: 'spin 0.8s linear infinite',
                   }} />
-                  {status === 'interpreting' ? 'Interpreting your request…' : 'Finding tracks…'}
+                  {status === 'interpreting' ? 'Interpreting your request\u2026' : 'Finding tracks\u2026'}
                 </div>
               )}
 
-              {/* ── Error ───────────────────────────────────────────────── */}
+              {/* -- Error -- */}
               {status === 'error' && (
                 <div style={{
                   margin: '10px 14px', padding: '10px 12px',
                   background: '#110000', border: '1px solid #440000',
                   borderRadius: 8, fontSize: 11, color: '#ff6666',
                 }}>
-                  ⚠ {errorMsg}
+                  {errorMsg}
                   <div style={{ fontSize: 10, color: '#883333', marginTop: 4 }}>
                     Make sure the backend is running at localhost:8000 and /chat/* routes are mounted.
                   </div>
                 </div>
               )}
 
-              {/* ── Results ─────────────────────────────────────────────── */}
+              {/* -- Results -- */}
               <div ref={resultsRef} style={{ padding: '0 14px 14px' }}>
-                <SearchResults result={result} source={selectedTrack} />
+                <SearchResults
+                  result={result}
+                  source={selectedTrack}
+                  onTrackClick={onTrackSelect}
+                  onFindSimilar={handleFindSimilarInChat}
+                  onCandidateSelect={handleCandidateSelect}
+                />
               </div>
 
-              {/* ── Search history ───────────────────────────────────────── */}
+              {/* -- Search history -- */}
               {history.length > 1 && !isBusy && (
                 <div style={{
                   borderTop: '1px solid #001010', padding: '10px 14px', flexShrink: 0,
@@ -507,4 +716,6 @@ export default function DJChatbox({ selectedTrack, trackCount }) {
       `}</style>
     </>
   );
-}
+});
+
+export default DJChatbox;

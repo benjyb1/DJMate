@@ -556,7 +556,7 @@ class DatabaseManager:
 
         return {
             "trackid": raw_data["trackid"],
-            "filepath": raw_data["filepath"],
+            "filepath": raw_data.get("filepath"),
             "title": raw_data["title"],
             "artist": raw_data["artist"],
             "album": raw_data.get("album"),

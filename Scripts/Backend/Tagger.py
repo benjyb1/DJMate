@@ -126,8 +126,16 @@ def get_unlabeled_track():
     tracks_resp = supabase.table("tracks").select("trackid,title,artist,filepath,bpm,key").execute()
     if not tracks_resp.data: return None
 
-    labels_resp = supabase.table("track_labels").select("trackid,semantic_tags").execute()
-    tagged_ids = {row["trackid"] for row in labels_resp.data if row.get("semantic_tags")}
+    # A track counts as "labelled" only if it has real semantic_tags content
+    # AND was tagged by a human (manual or auto_reviewed).
+    # Rows with tag_source=NULL or tag_source='auto' still show up for manual review.
+    labels_resp = supabase.table("track_labels").select("trackid,semantic_tags,tag_source").execute()
+    tagged_ids = {
+        row["trackid"]
+        for row in labels_resp.data
+        if row.get("semantic_tags")
+        and row.get("tag_source") in ("manual", "auto_reviewed")
+    }
 
     unlabeled_tracks = [t for t in tracks_resp.data if t["trackid"] not in tagged_ids]
     if not unlabeled_tracks: return None
@@ -144,14 +152,22 @@ def get_unlabeled_track():
     return selected_track
 
 def save_to_db(trackid, semantic_tags_list, energy, vibe_list):
-    existing = supabase.table("track_labels").select("trackid").eq("trackid", trackid).execute()
+    existing = supabase.table("track_labels").select("trackid, tag_source").eq("trackid", trackid).execute()
+
+    # If this track was previously auto-tagged, mark it as reviewed by a human.
+    # If it's new or already manual, keep/set it as manual.
+    existing_row = existing.data[0] if existing.data else None
+    prev_source = existing_row.get("tag_source") if existing_row else None
+    new_source = "auto_reviewed" if prev_source == "auto" else "manual"
+
     payload = {
         "trackid": trackid,
         "semantic_tags": semantic_tags_list,
         "energy": energy,
         "vibe": vibe_list,
+        "tag_source": new_source,
     }
-    if existing.data:
+    if existing_row:
         supabase.table("track_labels").update(payload).eq("trackid", trackid).execute()
     else:
         supabase.table("track_labels").insert(payload).execute()

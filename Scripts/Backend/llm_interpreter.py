@@ -166,23 +166,222 @@ class SemanticInterpreter:
     ) -> Dict[str, Any]:
         """
         Convert a natural language DJ request to structured search parameters.
-        Returns a dict that includes `track_count` (LLM-parsed, default 5).
+
+        Step 1: Classify the intent (find_similar_track | vibe_genre_search |
+                transition_from_current).
+        Step 2: Route to the appropriate interpretation path.
+
+        Returns a dict that always includes:
+          - intent: str
+          - track_count: int
+          - confidence: float
+          - reasoning: str
+          For vibe_genre_search / transition_from_current:
+            - tag_scores, vibe_scores, energy_range, bpm_range
+          For find_similar_track:
+            - track_name: str (the track the user asked about)
+            - track_candidates: list of {trackid, title, artist, match_score}
         """
         if not self._tags_loaded:
             await self._load_available_tags()
         if not self.providers:
             return await self._fallback_interpretation(natural_query, context)
 
-        system_prompt = self._build_system_prompt(context)
-        user_prompt   = self._build_user_prompt(natural_query)
+        # ── Step 1: classify intent ───────────────────────────────────────────
+        intent_result = await self._classify_intent(natural_query, context)
+        intent = intent_result.get("intent", "vibe_genre_search")
+        logger.info(f"🎯 Intent: {intent} — '{natural_query}'")
 
+        # ── Step 2: route ─────────────────────────────────────────────────────
         try:
-            parsed   = await self._generate_with_fallback(system_prompt, user_prompt)
-            validated = await self._validate_and_enhance(parsed, context)
-            return validated
+            if intent == "find_similar_track":
+                return await self._interpret_find_similar(natural_query, intent_result, context)
+            else:
+                # vibe_genre_search or transition_from_current both go through
+                # the standard tag-scoring path
+                system_prompt = self._build_system_prompt(context, intent=intent)
+                user_prompt   = self._build_user_prompt(natural_query)
+                parsed   = await self._generate_with_fallback(system_prompt, user_prompt)
+                validated = await self._validate_and_enhance(parsed, context)
+                validated["intent"] = intent
+                return validated
         except Exception as e:
             logger.error(f"All LLM providers failed: {e}")
-            return await self._fallback_interpretation(natural_query, context)
+            result = await self._fallback_interpretation(natural_query, context)
+            result["intent"] = intent
+            return result
+
+    # -------------------------------------------------------------------------
+    # Intent classification
+    # -------------------------------------------------------------------------
+
+    async def _classify_intent(
+            self,
+            query: str,
+            context: Optional[InterpretationContext],
+    ) -> Dict[str, Any]:
+        """
+        Ask the LLM to classify the user's intent into one of three categories.
+        Uses a small, focused prompt to keep latency low.
+        """
+        has_current_track = bool(context and context.current_track)
+        current_track_hint = ""
+        if has_current_track:
+            t = context.current_track
+            current_track_hint = (
+                f"The DJ is currently playing: {t.get('title','?')} by {t.get('artist','?')}."
+            )
+
+        system_prompt = f"""You are a DJ assistant. Classify the user's request into exactly one intent.
+
+{current_track_hint}
+
+INTENTS:
+1. "find_similar_track" — user names a specific song/artist and wants similar tracks.
+   Examples: "songs like God's Plan", "find me tracks like Strobe", "more like Eric Prydz",
+             "something like that last track", "give me stuff similar to Aphex Twin"
+
+2. "vibe_genre_search" — user describes a sound, genre, vibe, or energy they want.
+   Examples: "dark tech house", "upbeat minimal", "give me 6 ketty bangers",
+             "something melodic and deep", "peak time euphoric techno"
+
+3. "transition_from_current" — user references the current track and wants to move
+   in a direction (higher/lower energy, different vibe, same key etc).
+   Examples: "take it higher", "bring it down a bit", "keep this vibe but darker",
+             "something that flows from this". Only valid if a current track is playing.
+
+OUTPUT — valid JSON only:
+{{
+  "intent": "find_similar_track" | "vibe_genre_search" | "transition_from_current",
+  "track_name": "<name of track/artist if intent is find_similar_track, else null>",
+  "reasoning": "<one sentence>"
+}}"""
+
+        user_prompt = f'Request: "{query}"'
+
+        try:
+            parsed = await self._generate_with_fallback(system_prompt, user_prompt)
+            intent = parsed.get("intent", "vibe_genre_search")
+            # If no current track is playing, transition_from_current is meaningless
+            if intent == "transition_from_current" and not has_current_track:
+                intent = "vibe_genre_search"
+                parsed["reasoning"] = "No current track playing — treating as vibe/genre search."
+            parsed["intent"] = intent
+            return parsed
+        except Exception as e:
+            logger.warning(f"Intent classification failed: {e} — defaulting to vibe_genre_search")
+            return {"intent": "vibe_genre_search", "track_name": None, "reasoning": "fallback"}
+
+    # -------------------------------------------------------------------------
+    # find_similar_track path: fuzzy name search → candidate list
+    # -------------------------------------------------------------------------
+
+    async def _interpret_find_similar(
+            self,
+            query: str,
+            intent_result: Dict[str, Any],
+            context: Optional[InterpretationContext],
+    ) -> Dict[str, Any]:
+        """
+        Handle a find_similar_track intent.
+
+        1. Extract the track/artist name from the intent classification.
+        2. Fuzzy-search the DB for up to 5 candidate matches.
+        3. Return a result with intent='find_similar_track' and track_candidates
+           so the caller can pick the best match and run embedding similarity.
+        """
+        track_name = (intent_result.get("track_name") or "").strip()
+        if not track_name:
+            # Try to extract from raw query as a fallback
+            track_name = query
+
+        candidates = await self._fuzzy_track_search(track_name)
+
+        import re
+        m = re.search(r'\b(\d+)\s*(?:track|song|result|tune)s?\b', query.lower())
+        track_count = max(1, int(m.group(1))) if m else 7
+
+        return {
+            "intent": "find_similar_track",
+            "track_name": track_name,
+            "track_candidates": candidates,
+            "track_count": track_count,
+            "confidence": 0.95 if candidates else 0.3,
+            "reasoning": (
+                f"Looking for tracks similar to '{track_name}'. "
+                f"Found {len(candidates)} candidate match(es) in library."
+                if candidates
+                else f"Could not find '{track_name}' in the library."
+            ),
+            "model_used": intent_result.get("model_used", "intent-classifier"),
+        }
+
+    async def _fuzzy_track_search(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Search the tracks table for title/artist matches using ilike (case-insensitive
+        substring match). Returns a ranked list of candidates with a rough match_score.
+
+        Postgres pg_trgm would be ideal but requires an extension; ilike on both
+        fields covers the common case well enough without any schema changes.
+        """
+        query = query.strip()
+        if not query:
+            return []
+
+        candidates: Dict[str, Dict[str, Any]] = {}
+
+        # Title search — exact substring match (highest confidence)
+        try:
+            resp = self.supabase.table("tracks") \
+                .select("trackid, title, artist, bpm, key") \
+                .ilike("title", f"%{query}%") \
+                .limit(limit) \
+                .execute()
+            for row in (resp.data or []):
+                tid = str(row["trackid"])
+                # Score: 1.0 if query matches full title, else 0.85
+                score = 1.0 if row.get("title", "").lower() == query.lower() else 0.85
+                candidates[tid] = {**row, "trackid": tid, "match_score": score, "match_field": "title"}
+        except Exception as e:
+            logger.warning(f"Title search failed: {e}")
+
+        # Artist search — slightly lower confidence
+        if len(candidates) < limit:
+            try:
+                resp = self.supabase.table("tracks") \
+                    .select("trackid, title, artist, bpm, key") \
+                    .ilike("artist", f"%{query}%") \
+                    .limit(limit) \
+                    .execute()
+                for row in (resp.data or []):
+                    tid = str(row["trackid"])
+                    if tid not in candidates:
+                        candidates[tid] = {**row, "trackid": tid, "match_score": 0.75, "match_field": "artist"}
+            except Exception as e:
+                logger.warning(f"Artist search failed: {e}")
+
+        # Try individual words if no results yet (handles "Gods Plan" → "God's Plan")
+        if not candidates:
+            words = [w for w in query.split() if len(w) > 3]
+            for word in words[:3]:
+                try:
+                    resp = self.supabase.table("tracks") \
+                        .select("trackid, title, artist, bpm, key") \
+                        .ilike("title", f"%{word}%") \
+                        .limit(limit) \
+                        .execute()
+                    for row in (resp.data or []):
+                        tid = str(row["trackid"])
+                        if tid not in candidates:
+                            candidates[tid] = {**row, "trackid": tid, "match_score": 0.6, "match_field": "title_word"}
+                except Exception as e:
+                    logger.warning(f"Word search failed for '{word}': {e}")
+                if candidates:
+                    break
+
+        result = sorted(candidates.values(), key=lambda x: x["match_score"], reverse=True)
+        logger.info(f"🔍 Fuzzy search '{query}' → {len(result)} candidate(s)")
+        return result[:limit]
 
     # -------------------------------------------------------------------------
     # Public: search with progressive relaxation + inference
@@ -692,42 +891,61 @@ class SemanticInterpreter:
     # Prompts
     # -------------------------------------------------------------------------
 
-    def _build_system_prompt(self, context: Optional[InterpretationContext]) -> str:
+    def _build_system_prompt(
+            self,
+            context: Optional[InterpretationContext],
+            intent: str = "vibe_genre_search",
+    ) -> str:
         semantic_tags_list = sorted(self.available_tags.semantic_tags)
         vibes_list         = sorted(self.available_tags.vibes)
 
         context_info = ""
+        transition_instruction = ""
         if context and context.current_track:
             t = context.current_track
+            ctx_tags  = t.get("semantic_tags") or []
+            ctx_vibes = t.get("vibe_descriptors") or []
             context_info = (
-                f"\nCurrent Track: {t.get('title','Unknown')} — "
-                f"Key: {t.get('key','?')}  BPM: {t.get('bpm','?')}\n"
+                f"\nCurrent Track: {t.get('title','Unknown')} by {t.get('artist','Unknown')}"
+                f"\n  Key: {t.get('key','?')}  BPM: {t.get('bpm','?')}  Energy: {t.get('energy','?')}"
+                f"\n  Tags: {ctx_tags}  Vibes: {ctx_vibes}\n"
             )
+            if intent == "transition_from_current":
+                transition_instruction = (
+                    "\nThis is a TRANSITION request from the current track above. "
+                    "Use the current track's tags/vibes/energy as the baseline and "
+                    "shift them according to what the user asks (higher energy, darker, etc). "
+                    "Preserve compatible tags unless the user explicitly wants to change them.\n"
+                )
 
         return f"""You are an expert DJ assistant interpreting messy natural language requests.
-{context_info}
-AVAILABLE DATABASE TAGS:
+{context_info}{transition_instruction}
+AVAILABLE DATABASE TAGS — you MUST only use tags from these exact lists:
 Genres/Styles : {json.dumps(semantic_tags_list)}
 Vibes         : {json.dumps(vibes_list)}
 
 TASK:
-The user will describe what they want to hear in any words they like.
-Your job is to map their intent to the tags above using CONFIDENCE SCORES (0.0–1.0).
+Map the user's request to tags from the lists above using CONFIDENCE SCORES (0.0–1.0).
 
 Rules:
-- Only use tags from the lists above — no invented tags
+- ONLY use tags from the lists above — never invent tags not in those lists
+- If the user's words don't exactly match a tag, pick the closest one from the list
 - Score reflects how well the tag captures the user's intent
-- Include tags the user didn't name but that fit the vibe (with lower scores)
+- Include nearby tags that fit the vibe even if not mentioned (with lower scores)
+- Energy range is on a 1–10 scale (1=very chill, 10=absolute peak time)
+  Infer from context: "upbeat"→[6,8], "dark moody"→[4,7], "peak time"→[8,10],
+  "warm-up"→[2,5], "closing"→[7,9], "after hours"→[5,8]
 - A messy query like "fast kicking house" might map:
     tag_scores:  {{"house": 0.9, "tech house": 0.75, "minimal techno": 0.3}}
     vibe_scores: {{"energetic": 0.9, "driving": 0.8, "dark": 0.2}}
+    energy_range: [7, 9]
 - "give me 6 tracks" → track_count: 6  |  no count mentioned → track_count: 5
 
 OUTPUT — valid JSON only, no markdown:
 {{
     "tag_scores"       : {{"tag_name": 0.0-1.0}},
     "vibe_scores"      : {{"vibe_name": 0.0-1.0}},
-    "energy_range"     : [min, max] or null,
+    "energy_range"     : [min, max] on 1-10 scale, or null,
     "bpm_range"        : [min, max] or null,
     "key_compatibility": "same" | "compatible" | "any" | null,
     "direction"        : "build" | "maintain" | "breakdown" | null,
