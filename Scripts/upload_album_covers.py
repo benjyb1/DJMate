@@ -130,12 +130,10 @@ def upload_album_art(image_data, filename):
 # ==================== MAIN PROCESS ====================
 
 def process_all_tracks():
-    print(f"Scanning: {MUSIC_FOLDER}\n")
-
     progress = load_progress()
     track_art_map = progress.get('uploaded_tracks', {})
 
-    # Step 1: Ensure missing-artist keys are normalised
+    # Step 1: Normalise any legacy keys in the progress file
     normalised_map = {}
     for key, value in track_art_map.items():
         parts = key.split("_", 1)
@@ -143,59 +141,90 @@ def process_all_tracks():
             artist, title = parts
         else:
             continue
-
         artist = normalise_artist(artist)
-        title = normalise_title(title)
-
+        title  = normalise_title(title)
         if title:
             new_key = f"{artist}_{title}".lower()
             normalised_map[new_key] = value
-
     track_art_map = normalised_map
     save_progress({'uploaded_tracks': track_art_map})
+    print(f"Progress file: {len(track_art_map)} covers already uploaded\n")
 
-    print(f"Loaded {len(track_art_map)} tracks from progress file")
+    # Step 2: Scan music folder and upload any missing covers
+    print(f"Scanning: {MUSIC_FOLDER}")
+    audio_files = [
+        p for p in MUSIC_FOLDER.rglob("*")
+        if p.suffix.lower() in AUDIO_EXTENSIONS
+    ]
+    print(f"Found {len(audio_files)} audio files\n")
 
-    # Step 2: Update database
-    response = supabase.table('tracks').select('*').execute()
+    newly_uploaded = 0
+    scan_skipped   = 0
+    scan_no_art    = 0
+
+    for audio_path in audio_files:
+        artist, title = get_track_info(audio_path)
+        if not title:
+            scan_no_art += 1
+            continue
+
+        track_key = f"{normalise_artist(artist)}_{title}".lower()
+
+        if track_key in track_art_map:
+            scan_skipped += 1
+            continue  # already uploaded
+
+        image_data = extract_album_art(audio_path)
+        if not image_data:
+            scan_no_art += 1
+            continue
+
+        filename = create_safe_filename(normalise_artist(artist), title)
+        url = upload_album_art(image_data, filename)
+        if url:
+            track_art_map[track_key] = {'url': url}
+            newly_uploaded += 1
+            if newly_uploaded % 25 == 0:
+                save_progress({'uploaded_tracks': track_art_map})
+                print(f"  Uploaded {newly_uploaded} covers so far …")
+
+    save_progress({'uploaded_tracks': track_art_map})
+    print(f"\nScan complete — uploaded: {newly_uploaded}  "
+          f"already done: {scan_skipped}  no art in file: {scan_no_art}\n")
+
+    # Step 3: Update album_art_url column in DB for every track
+    print("Updating database …")
+    response  = supabase.table('tracks').select('trackid, artist, title').execute()
     db_tracks = response.data
-
-    print(f"Found {len(db_tracks)} tracks in database")
+    print(f"  {len(db_tracks)} tracks in DB")
 
     updated_count = 0
-    not_found = 0
+    not_found     = 0
 
     for track in db_tracks:
         artist = normalise_artist(track.get('artist'))
-        title = normalise_title(track.get('title'))
-
+        title  = normalise_title(track.get('title'))
         if not title:
             not_found += 1
             continue
 
         track_key = f"{artist}_{title}".lower()
-
-        if track_key in track_art_map:
-            url = track_art_map[track_key]['url']
-
-            try:
-                supabase.table('tracks').update({
-                    'album_art_url': url
-                }).eq('trackid', track['trackid']).execute()
-
-                updated_count += 1
-
-                if updated_count % 50 == 0:
-                    print(f"Updated {updated_count} tracks...")
-
-            except Exception as e:
-                print(f"❌ Error updating {track['trackid']}: {e}")
-        else:
+        if track_key not in track_art_map:
             not_found += 1
+            continue
 
-    print("\nUpdate complete")
-    print(f"Updated: {updated_count}")
-    print(f"No cover found for: {not_found}")
+        url = track_art_map[track_key]['url']
+        try:
+            supabase.table('tracks').update({
+                'album_art_url': url
+            }).eq('trackid', track['trackid']).execute()
+            updated_count += 1
+            if updated_count % 50 == 0:
+                print(f"  Updated {updated_count} tracks …")
+        except Exception as e:
+            print(f"  ❌ Error updating trackid {track['trackid']}: {e}")
+
+    print(f"\n✅  Done.  DB updated: {updated_count}  No cover found: {not_found}")
 
 if __name__ == "__main__":
     process_all_tracks()

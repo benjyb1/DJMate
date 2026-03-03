@@ -527,19 +527,21 @@ OUTPUT — valid JSON only:
                 "trackid, semantic_tags, vibe, energy"
             )
 
-            # jsonb "contains at least one of these values" via OR of cs filters.
-            # cs.[\"X\"] means the jsonb array contains the element X.
+            # Combine ALL tag + vibe conditions into a single .or_() call.
+            # Two separate .or_() calls get ANDed by PostgREST, which would
+            # require a track to match BOTH a genre tag AND a vibe — wrong.
+            # One combined call means "match any tag OR any vibe".
+            all_or_parts: list[str] = []
             if query_tags:
-                or_parts = ",".join(
+                all_or_parts += [
                     f'semantic_tags.cs.{json.dumps([t])}' for t in query_tags
-                )
-                labels_q = labels_q.or_(or_parts)
-
+                ]
             if query_vibes:
-                or_parts = ",".join(
+                all_or_parts += [
                     f'vibe.cs.{json.dumps([v])}' for v in query_vibes
-                )
-                labels_q = labels_q.or_(or_parts)
+                ]
+            if all_or_parts:
+                labels_q = labels_q.or_(",".join(all_or_parts))
 
             if params.get("energy_range"):
                 lo, hi = params["energy_range"]
@@ -925,26 +927,34 @@ OUTPUT — valid JSON only:
 
         return f"""You are an expert DJ assistant interpreting messy natural language requests.
 {context_info}{transition_instruction}
-AVAILABLE DATABASE TAGS — you MUST only use tags from these exact lists:
+AVAILABLE DATABASE TAGS — you MUST only use tags from these EXACT lists. No exceptions.
 Genres/Styles : {json.dumps(semantic_tags_list)}
 Vibes         : {json.dumps(vibes_list)}
 
 TASK:
-Map the user's request to tags from the lists above using CONFIDENCE SCORES (0.0–1.0).
+Map the user's request to tags/vibes from the lists above using CONFIDENCE SCORES (0.0–1.0).
 
-Rules:
-- ONLY use tags from the lists above — never invent tags not in those lists
-- If the user's words don't exactly match a tag, pick the closest one from the list
-- Score reflects how well the tag captures the user's intent
-- Include nearby tags that fit the vibe even if not mentioned (with lower scores)
-- Energy range is on a 1–10 scale (1=very chill, 10=absolute peak time)
-  Infer from context: "upbeat"→[6,8], "dark moody"→[4,7], "peak time"→[8,10],
-  "warm-up"→[2,5], "closing"→[7,9], "after hours"→[5,8]
-- A messy query like "fast kicking house" might map:
+CRITICAL RULES — read carefully:
+1. ONLY output tag/vibe names that appear VERBATIM in the lists above.
+   Any name not in the list will be silently discarded and the search will fail.
+2. ALWAYS remap emotional descriptors the user uses to the closest available vibe.
+   If the user says "bittersweet" and that word is not in the Vibes list, pick the
+   closest available vibes (e.g. "emotional", "melancholic", "moody", "dark", "warm").
+   Never leave vibe_scores empty — always find the best available approximation.
+3. If the user says "nostalgic", map to available vibes like "warm", "soulful", "emotional".
+   If the user says "euphoric", map to available vibes like "uplifting", "euphoric", "energetic".
+   If the user says "intense", map to available vibes like "driving", "dark", "aggressive".
+   Always pick from the list — never invent a new word.
+4. Score reflects closeness of match: exact match → 0.9+, rough approximation → 0.4–0.6.
+5. Include nearby tags that fit the vibe even if not mentioned (with lower scores).
+6. Energy range is on a 1–10 scale (1=very chill, 10=absolute peak time).
+   Infer from context: "upbeat"→[6,8], "dark moody"→[4,7], "peak time"→[8,10],
+   "warm-up"→[2,5], "closing"→[7,9], "after hours"→[5,8], "bittersweet"→[4,6]
+7. A messy query like "fast kicking house" might map:
     tag_scores:  {{"house": 0.9, "tech house": 0.75, "minimal techno": 0.3}}
     vibe_scores: {{"energetic": 0.9, "driving": 0.8, "dark": 0.2}}
     energy_range: [7, 9]
-- "give me 6 tracks" → track_count: 6  |  no count mentioned → track_count: 5
+8. "give me 6 tracks" → track_count: 6  |  no count mentioned → track_count: 5
 
 OUTPUT — valid JSON only, no markdown:
 {{
@@ -967,6 +977,42 @@ OUTPUT — valid JSON only, no markdown:
     # -------------------------------------------------------------------------
     # Validate & enhance LLM output
     # -------------------------------------------------------------------------
+
+    def _fuzzy_rescue(self, name: str, lower_map: Dict[str, str], score: float) -> Optional[Tuple[str, float]]:
+        """
+        When the LLM outputs a tag/vibe not in the DB, try to rescue it by finding
+        the closest DB entry using substring and character-level similarity.
+        Returns (canonical_name, adjusted_score) or None if no good match found.
+        """
+        from difflib import SequenceMatcher
+        name_lower = name.lower()
+        name_words = set(name_lower.split())
+
+        best_match: Optional[str] = None
+        best_sim = 0.0
+
+        for db_lower, db_canonical in lower_map.items():
+            # Substring containment (e.g. "emotional" ↔ "emotionally driven")
+            if name_lower in db_lower or db_lower in name_lower:
+                sim = 0.8
+            else:
+                # Jaccard on word tokens
+                db_words = set(db_lower.split())
+                union = name_words | db_words
+                sim = len(name_words & db_words) / len(union) if union else 0.0
+                # Character-level ratio as tiebreaker
+                char_sim = SequenceMatcher(None, name_lower, db_lower).ratio()
+                sim = max(sim, char_sim)
+
+            if sim > best_sim:
+                best_sim = sim
+                best_match = db_canonical
+
+        if best_match and best_sim >= 0.35:
+            rescued_score = round(float(score) * best_sim, 3)
+            logger.info(f"  ↩ Fuzzy rescued '{name}' → '{best_match}' (sim={best_sim:.2f}, score={rescued_score})")
+            return best_match, rescued_score
+        return None
 
     async def _validate_and_enhance(
             self,
@@ -994,7 +1040,13 @@ OUTPUT — valid JSON only, no markdown:
             if canonical:
                 tag_scores[canonical] = round(float(score), 3)
             else:
-                stripped_tags.append(tag)
+                # Safety net: fuzzy match to closest DB tag
+                rescued = self._fuzzy_rescue(tag, tag_lower_map, score)
+                if rescued:
+                    canon, adj_score = rescued
+                    tag_scores[canon] = max(tag_scores.get(canon, 0.0), adj_score)
+                else:
+                    stripped_tags.append(tag)
         if stripped_tags:
             logger.warning(
                 f"⚠️  Tags not in DB (stripped): {stripped_tags}\n"
@@ -1013,7 +1065,13 @@ OUTPUT — valid JSON only, no markdown:
             if canonical:
                 vibe_scores[canonical] = round(float(score), 3)
             else:
-                stripped_vibes.append(vibe)
+                # Safety net: fuzzy match to closest DB vibe
+                rescued = self._fuzzy_rescue(vibe, vibe_lower_map, score)
+                if rescued:
+                    canon, adj_score = rescued
+                    vibe_scores[canon] = max(vibe_scores.get(canon, 0.0), adj_score)
+                else:
+                    stripped_vibes.append(vibe)
         if stripped_vibes:
             logger.warning(
                 f"⚠️  Vibes not in DB (stripped): {stripped_vibes}\n"

@@ -45,6 +45,17 @@ N_NEIGHBOURS = 10
 # Prevents very weak signals from being written as tags.
 MIN_TAG_WEIGHT = 0.5
 
+# Maximum number of genre tags written per track.
+MAX_GENRES = 2
+
+# A secondary genre is only included if its score is at least this fraction
+# of the top genre's score.  0.6 means "must be at least 60% as confident".
+# Prevents weak bleed-through genres being written alongside a dominant one.
+SECONDARY_GENRE_RATIO = 0.6
+
+# Maximum number of vibe tags written per track.
+MAX_VIBES = 4
+
 
 # ── Supabase setup ────────────────────────────────────────────────────────────
 
@@ -179,6 +190,12 @@ def main():
                         help=f"Minimum cosine similarity threshold (default {DEFAULT_MIN_SIMILARITY}).")
     parser.add_argument("--overwrite-auto", action="store_true",
                         help="Re-run auto-tagging for tracks already tagged as 'auto'.")
+    parser.add_argument("--max-genres", type=int, default=MAX_GENRES,
+                        help=f"Max genre tags per track (default {MAX_GENRES}).")
+    parser.add_argument("--genre-ratio", type=float, default=SECONDARY_GENRE_RATIO,
+                        help=f"Min score ratio for secondary genres vs top genre (default {SECONDARY_GENRE_RATIO}).")
+    parser.add_argument("--max-vibes", type=int, default=MAX_VIBES,
+                        help=f"Max vibe tags per track (default {MAX_VIBES}).")
     args = parser.parse_args()
 
     supabase = get_supabase()
@@ -280,8 +297,18 @@ def main():
             print(f"  {progress} SKIP (no tag signal)  — {title} — {artist}")
             continue
 
-        final_tags = [tag for tag, _ in genre_scores]
-        final_vibes = [vibe for vibe, _ in vibe_scores]
+        # Cap genres: always take top 1; only add further genres if their
+        # confidence score is ≥ genre_ratio × top score (i.e. a real signal,
+        # not just faint bleed-through from the neighbour pool).
+        final_tags = []
+        if genre_scores:
+            top_tag, top_score = genre_scores[0]
+            final_tags.append(top_tag)
+            for tag, score in genre_scores[1:args.max_genres]:
+                if score >= top_score * args.genre_ratio:
+                    final_tags.append(tag)
+
+        final_vibes = [vibe for vibe, _ in vibe_scores[:args.max_vibes]]
         energy = round(predicted_energy) if predicted_energy is not None else None
 
         print(f"  {progress} TAG  (sim {max_sim:.2f}) — {title} — {artist}")
