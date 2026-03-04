@@ -1,8 +1,7 @@
 {
-  "root": "Frontend",
   "installCommand": "npm install",
   "buildCommand": "npm run build",
-  "outputDirectory": "Frontend/dist",
+  "outputDirectory": "dist",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
   ]
