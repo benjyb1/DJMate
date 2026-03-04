@@ -119,12 +119,12 @@ strictyaml==1.7.3
 supabase==2.28.0
 supabase-auth==2.28.0
 supabase-functions==2.28.0
-sympy==1.13.4
+sympy==1.13.3
 tenacity==9.1.4
 threadpoolctl==3.6.0
 tinycss2==1.4.0
 toml==0.10.2
-torch==2.10.0
+torch==2.6.0
 tornado==6.5.4
 tqdm==4.67.3
 traitlets==5.14.3
