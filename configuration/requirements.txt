@@ -1,28 +1,144 @@
-# Core dependencies
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-pydantic>=2.0.0
-python-multipart>=0.0.6
-numpy>=1.26.0
-
-# Optional: Database
-# sqlalchemy>=2.0.0
-# psycopg2-binary>=2.9.0  # PostgreSQL
-# asyncpg>=0.29.0         # Async PostgreSQL
-
-# Optional: Caching
-# redis>=5.0.0
-# aioredis>=2.0.0
-
-# Optional: LLM Integration
-# openai>=1.0.0
-# anthropic>=0.7.0
-# langchain>=0.1.0
-
-# Development dependencies (install with: pip install -r requirements-dev.txt)
-# pytest>=7.4.0
-# pytest-asyncio>=0.21.0
-# httpx>=0.25.0
-# black>=23.0.0
-# ruff>=0.1.0
-# mypy>=1.7.0
+altair==6.0.0
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.12.1
+appnope==0.1.4
+asttokens==3.0.1
+asyncpg==0.31.0
+attrs==25.4.0
+backcall==0.2.0
+beautifulsoup4==4.14.3
+bleach==6.3.0
+blinker==1.9.0
+cachetools==6.2.6
+certifi==2026.1.4
+cffi==2.0.0
+charset-normalizer==3.4.4
+click==8.3.1
+cryptography==46.0.5
+decorator==5.2.1
+defusedxml==0.7.1
+deprecation==2.1.0
+distro==1.9.0
+-e git+https://github.com/benjyb1/DJMate@8cddc009e20ff8adcde485238562c2e4953ff44d#egg=djmate
+docopt==0.6.2
+dotenv==0.9.9
+essentia-tensorflow==2.1b6.dev1389
+executing==2.2.1
+faiss-cpu==1.13.2
+fastapi==0.129.0
+fastjsonschema==2.21.2
+filelock==3.17.0
+fsspec==2025.3.0
+gitdb==4.0.12
+GitPython==3.1.46
+h11==0.16.0
+h2==4.3.0
+hpack==4.1.0
+httpcore==1.0.9
+httptools==0.7.1
+httpx==0.28.1
+hyperframe==6.1.0
+idna==3.11
+ipython==8.12.3
+jedi==0.19.2
+Jinja2==3.1.6
+jiter==0.13.0
+joblib==1.5.3
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+jupyter_client==8.8.0
+jupyter_core==5.9.1
+jupyterlab_pygments==0.3.0
+markdown-it-py==4.0.0
+MarkupSafe==3.0.2
+matplotlib-inline==0.2.1
+mdurl==0.1.2
+mistune==3.2.0
+mmh3==5.2.0
+mpmath==1.3.0
+multidict==6.7.1
+mutagen==1.47.0
+narwhals==2.16.0
+nbclient==0.10.4
+nbconvert==7.17.0
+nbformat==5.10.4
+networkx==3.4.2
+numpy==2.4.2
+openai==2.20.0
+packaging==25.0
+pandas==2.3.3
+pandocfilters==1.5.1
+parso==0.8.6
+pexpect==4.9.0
+pickleshare==0.7.5
+pillow==11.3.0
+pipreqs==0.5.0
+platformdirs==4.9.2
+postgrest==2.28.0
+prompt_toolkit==3.0.52
+propcache==0.4.1
+protobuf==6.33.5
+ptyprocess==0.7.0
+pure_eval==0.2.3
+pyarrow==23.0.0
+pycparser==3.0
+pydantic==2.12.5
+pydantic_core==2.41.5
+pydeck==0.9.1
+Pygments==2.19.2
+pyiceberg==0.11.0
+PyJWT==2.11.0
+pyparsing==3.3.2
+pyroaring==1.0.3
+pytesseract==0.3.13
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.1
+python-multipart==0.0.22
+pytz==2025.2
+PyYAML==6.0.3
+pyzmq==27.1.0
+realtime==2.28.0
+redis==7.1.1
+referencing==0.37.0
+requests==2.32.5
+rich==14.3.2
+rpds-py==0.30.0
+scikit-learn==1.8.0
+scipy==1.17.0
+setuptools==76.0.0
+six==1.17.0
+smmap==5.0.2
+sniffio==1.3.1
+soupsieve==2.8.3
+stack-data==0.6.3
+starlette==0.52.1
+storage3==2.28.0
+streamlit==1.54.0
+StrEnum==0.4.15
+strictyaml==1.7.3
+supabase==2.28.0
+supabase-auth==2.28.0
+supabase-functions==2.28.0
+sympy==1.13.1
+tenacity==9.1.4
+threadpoolctl==3.6.0
+tinycss2==1.4.0
+toml==0.10.2
+torch==2.6.0
+tornado==6.5.4
+tqdm==4.67.3
+traitlets==5.14.3
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+tzdata==2025.3
+urllib3==2.6.3
+uvicorn==0.40.0
+uvloop==0.22.1
+watchfiles==1.1.1
+wcwidth==0.6.0
+webencodings==0.5.1
+websockets==15.0.1
+yarg==0.1.9
+yarl==1.22.0
+zstandard==0.25.0
