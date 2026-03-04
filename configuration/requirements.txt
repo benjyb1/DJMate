@@ -20,7 +20,6 @@ decorator==5.2.1
 defusedxml==0.7.1
 deprecation==2.1.0
 distro==1.9.0
--e git+https://github.com/benjyb1/DJMate@8cddc009e20ff8adcde485238562c2e4953ff44d#egg=djmate
 docopt==0.6.2
 dotenv==0.9.9
 essentia-tensorflow==2.1b6.dev1389

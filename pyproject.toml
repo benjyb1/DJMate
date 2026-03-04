@@ -24,11 +24,11 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["Backend", "Backend.data"]
+packages = ["backend", "backend.data"]
 
 [tool.setuptools.package-data]
-Backend = ["*.py"]
-"Backend.data" = ["*.py"]
+backend = ["*.py"]
+"backend.data" = ["*.py"]
 
 [tool.black]
 line-length = 100
