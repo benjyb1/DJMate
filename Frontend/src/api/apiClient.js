@@ -9,7 +9,7 @@ class APIError extends Error {
 }
 
 class APIClient {
-  constructor(baseURL = 'http://localhost:8000') {
+  constructor(baseURL = import.meta.env.VITE_API_URL || 'http://localhost:8000') {
     this.baseURL = baseURL;
     this.defaultHeaders = {
       'Content-Type': 'application/json',

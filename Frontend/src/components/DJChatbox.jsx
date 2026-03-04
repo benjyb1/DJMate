@@ -12,7 +12,7 @@
 import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { apiClient } from '../api/apiClient';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // -- Utility: direction badge (mirrors describe_direction() in streamSimilar.py) --
 function describeDirection(source, candidate) {

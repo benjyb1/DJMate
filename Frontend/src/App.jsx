@@ -102,7 +102,7 @@ export default function App() {
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
-      audioRef.current.src = `http://localhost:8000/tracks/${selectedTrack.id}/audio`;
+      audioRef.current.src = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/tracks/${selectedTrack.id}/audio`;
       audioRef.current.play().catch(err => {
         console.error('Audio playback failed:', err);
         setIsPlaying(false);
