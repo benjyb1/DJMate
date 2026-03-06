@@ -8,14 +8,18 @@ Drop in your entire mixing folder. This script will:
   3. Extract BPM (librosa primary, Essentia fallback) + key (Essentia)
   4. Compute Discogs-EffNet embeddings (mean+std pooling)
   5. Upload to Supabase (tracks + track_labels tables)
-  6. Run auto_tagger.py on the newly added tracks
-  7. Re-run 3d_coordinator.py to update UMAP 3-D positions for the frontend
+  6. Upload audio file to Supabase Storage → set audio_url on the track
+  7. Compute MFCC fingerprint from local file → upsert to track_features
+  8. Run auto_tagger.py on the newly added tracks
+  9. Re-run 3d_coordinator.py to update UMAP 3-D positions for the frontend
 
 Usage:
   python scripts/ingest_music.py /path/to/mixing/folder
   python scripts/ingest_music.py /path/to/mixing/folder --dry-run
   python scripts/ingest_music.py /path/to/mixing/folder --skip-auto-tag
   python scripts/ingest_music.py /path/to/mixing/folder --skip-3d
+  python scripts/ingest_music.py /path/to/mixing/folder --skip-audio-upload
+  python scripts/ingest_music.py /path/to/mixing/folder --skip-fingerprints
   python scripts/ingest_music.py /path/to/mixing/folder --force-reembed
 
 Model path resolution (in order):
@@ -57,6 +61,28 @@ log = logging.getLogger("ingestor")
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".aiff", ".aif"}
 COVER_BUCKET     = "album-covers"
+AUDIO_BUCKET     = "audio-files"
+
+AUDIO_MIME_MAP = {
+    ".mp3":  "audio/mpeg",
+    ".flac": "audio/flac",
+    ".m4a":  "audio/mp4",
+    ".mp4":  "audio/mp4",
+    ".ogg":  "audio/ogg",
+    ".wav":  "audio/wav",
+    ".aiff": "audio/aiff",
+    ".aif":  "audio/aiff",
+}
+
+# MFCC fingerprint constants (must match compute_audio_fingerprints.py + LiveMode.jsx)
+FP_SR       = 22050
+FP_N_FFT    = 2048
+FP_N_MELS   = 40
+FP_N_MFCC   = 13
+FP_FMIN     = 20.0
+FP_FMAX     = 8000.0
+FP_OFFSET   = 15.0
+FP_DURATION = 90.0
 
 # Project root = parent of this script's directory (scripts/../)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -464,6 +490,70 @@ def _upload_cover(supabase, filepath: Path, artist: str, title: str) -> Optional
         return None
 
 
+# ── Audio storage upload ──────────────────────────────────────────────────────
+
+def _upload_audio_file(supabase, filepath: Path, trackid: int) -> Optional[str]:
+    """Upload a local audio file to Supabase Storage and return its public URL."""
+    ext  = filepath.suffix.lower()
+    mime = AUDIO_MIME_MAP.get(ext, "audio/mpeg")
+    bucket_path = f"{trackid}{ext}"
+    try:
+        with open(filepath, "rb") as f:
+            audio_bytes = f.read()
+        supabase.storage.from_(AUDIO_BUCKET).upload(
+            bucket_path,
+            audio_bytes,
+            file_options={"content-type": mime, "upsert": "true"},
+        )
+        url = supabase.storage.from_(AUDIO_BUCKET).get_public_url(bucket_path)
+        if isinstance(url, dict):
+            url = url.get("data", {}).get("publicUrl") or url.get("publicUrl")
+        return url
+    except Exception as exc:
+        log.warning(f"  Audio upload failed for trackid {trackid}: {exc}")
+        return None
+
+
+# ── MFCC fingerprint (local file, no download needed) ─────────────────────────
+
+def _compute_mfcc_fingerprint(filepath: Path) -> Optional[list]:
+    """Compute a 13-element L2-normalised MFCC vector from a local audio file.
+
+    Parameters match compute_audio_fingerprints.py and the browser JS implementation
+    (HTK mel scale, same fmin/fmax/n_mels/n_mfcc).
+    """
+    try:
+        import librosa
+        y, sr = librosa.load(str(filepath), sr=FP_SR, mono=True,
+                             duration=FP_DURATION, offset=FP_OFFSET)
+        if len(y) < FP_SR * 5:
+            y, sr = librosa.load(str(filepath), sr=FP_SR, mono=True,
+                                 duration=FP_DURATION, offset=0.0)
+        if len(y) < FP_SR * 2:
+            log.warning("  MFCC: audio too short — skipping fingerprint")
+            return None
+
+        mfcc_frames = librosa.feature.mfcc(
+            y=y, sr=sr,
+            n_mfcc=FP_N_MFCC,
+            n_fft=FP_N_FFT,
+            n_mels=FP_N_MELS,
+            fmin=FP_FMIN,
+            fmax=FP_FMAX,
+            htk=True,
+        )
+        mfcc_mean  = np.mean(mfcc_frames, axis=1)
+        mfcc_mean -= mfcc_mean.mean()
+        norm = np.linalg.norm(mfcc_mean)
+        if norm < 1e-10:
+            log.warning("  MFCC: zero-norm vector (silent?) — skipping fingerprint")
+            return None
+        return (mfcc_mean / norm).tolist()
+    except Exception as exc:
+        log.warning(f"  MFCC fingerprint error: {exc}")
+        return None
+
+
 # ── Supabase helpers ──────────────────────────────────────────────────────────
 
 def get_supabase():
@@ -639,8 +729,12 @@ def main():
                         help="Skip running auto_tagger.py after ingestion.")
     parser.add_argument("--skip-3d",       action="store_true",
                         help="Skip re-running 3d_coordinator.py after ingestion.")
-    parser.add_argument("--skip-covers",   action="store_true",
+    parser.add_argument("--skip-covers",        action="store_true",
                         help="Skip uploading album cover art to Supabase Storage.")
+    parser.add_argument("--skip-audio-upload",  action="store_true",
+                        help="Skip uploading audio files to Supabase Storage.")
+    parser.add_argument("--skip-fingerprints",  action="store_true",
+                        help="Skip computing MFCC fingerprints for new tracks.")
     args = parser.parse_args()
 
     folder = Path(args.folder).expanduser().resolve()
@@ -776,6 +870,28 @@ def main():
             log.info(f"  ✓ Uploaded (trackid={trackid})")
             stats["uploaded"] += 1
             newly_added_ids.append(trackid)
+
+            # Upload audio file to Supabase Storage
+            if not args.skip_audio_upload:
+                audio_url = _upload_audio_file(supabase, filepath, trackid)
+                if audio_url:
+                    supabase.table("tracks").update({"audio_url": audio_url}) \
+                        .eq("trackid", trackid).execute()
+                    log.info(f"  ✓ Audio uploaded to storage")
+
+                    # Compute MFCC fingerprint from local file (no re-download needed)
+                    if not args.skip_fingerprints:
+                        fp = _compute_mfcc_fingerprint(filepath)
+                        if fp:
+                            supabase.table("track_features").upsert({
+                                "trackid": trackid,
+                                "mfcc":    fp,
+                            }).execute()
+                            log.info(f"  ✓ MFCC fingerprint stored")
+                        else:
+                            log.warning(f"  ✗ MFCC fingerprint failed — skipping")
+                else:
+                    log.warning(f"  ✗ Audio upload failed — fingerprint skipped")
         else:
             log.error(f"  ✗ Upload failed")
             stats["failed"] += 1
@@ -796,13 +912,13 @@ def main():
     if args.dry_run or stats["uploaded"] == 0:
         return
 
-    # ── 6. Auto-tag new tracks ────────────────────────────────────────────────
+    # ── 8. Auto-tag new tracks ────────────────────────────────────────────────
     if not args.skip_auto_tag:
         _auto_tag_new_tracks(supabase, newly_added_ids)
     else:
         log.info("\n[--skip-auto-tag] Skipping auto-tagger.")
 
-    # ── 7. Rebuild 3-D UMAP coordinates ──────────────────────────────────────
+    # ── 9. Rebuild 3-D UMAP coordinates ──────────────────────────────────────
     if not args.skip_3d:
         log.info("\nRebuilding 3-D UMAP map for frontend …")
         _run_script("scripts/3d_coordinator.py")

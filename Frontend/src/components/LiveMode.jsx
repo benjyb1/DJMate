@@ -1,5 +1,5 @@
 // src/components/LiveMode.jsx
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { apiClient } from '../api/apiClient';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -482,12 +482,8 @@ function TrackRow({ track, isPlaying, isAnchor, onAdd, onPlay, onFindSimilar, on
         </div>
       </div>
 
-      {/* Info — click to explore from this track */}
-      <div
-        style={{ flex: 1, minWidth: 0, cursor: onSelectAnchor ? 'pointer' : 'default' }}
-        onClick={() => onSelectAnchor?.(track)}
-        title={onSelectAnchor ? 'Explore what comes after this track' : undefined}
-      >
+      {/* Info */}
+      <div style={{ flex: 1, minWidth: 0, cursor: 'default' }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: isAnchor ? '#c084fc' : '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', transition: '150ms ease' }}>
           {name}
         </div>
@@ -667,8 +663,17 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
 
   // Default anchor = last set track; or whatever the user clicked
   const effectiveAnchor = anchorTrack ?? (setList.length > 0 ? setList[setList.length - 1] : null);
-  const { starters, onTrajectory, energyUp, stepDown } = suggestDirectional(effectiveAnchor, setList, allNodes);
   const showStarters = setList.length === 0 && !anchorTrack;
+
+  // Memoised so suggestions don't re-shuffle on every keystroke re-render.
+  // Only recompute when the anchor identity, set composition, or library size changes.
+  const anchorId   = effectiveAnchor?.id ?? effectiveAnchor?.trackid ?? null;
+  const setListKey = setList.map(t => t.id).join(',');
+  const { starters, onTrajectory, energyUp, stepDown } = useMemo(
+    () => suggestDirectional(effectiveAnchor, setList, allNodes),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [anchorId, setListKey, allNodes.length],
+  );
 
   const selectAnchor = useCallback((track) => {
     const id = String(track.id || track.trackid);
