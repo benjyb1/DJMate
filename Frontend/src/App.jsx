@@ -251,10 +251,26 @@ export default function App() {
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleNodeClick = useCallback((node) => {
     if (!fgRef.current) return;
+    // Second click on an already-selected node → toggle play
+    if (selectedTrack?.id === node.id) {
+      const a = audioRef.current;
+      if (!a) return;
+      if (isPlaying) {
+        a.pause();
+        setIsPlaying(false);
+      } else {
+        const src = node.audioUrl
+          || `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/tracks/${node.id}/audio`;
+        a.src = src;
+        a.play().catch(() => setIsPlaying(false));
+        setIsPlaying(true);
+      }
+      return;
+    }
     setSelectedTrack(node);
     const pos = new THREE.Vector3(node.x, node.y, node.z);
     fgRef.current.cameraPosition(pos.clone().add(new THREE.Vector3(0, 30, 120)), pos, 1000);
-  }, []);
+  }, [selectedTrack, isPlaying]);
 
   const handleChatTrackSelect = useCallback((trackid) => {
     const node = allNodes.find(n => String(n.id) === String(trackid));

@@ -571,14 +571,17 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
   const [playingId, setPlayingId]         = useState(null);
   const [anchorTrack, setAnchorTrack]     = useState(null); // track to explore from
 
-  const micStreamRef     = useRef(null);
-  const audioCtxRef      = useRef(null);
-  const analyserRef      = useRef(null);
-  const prevSpectrumRef  = useRef(null);
-  const fluxHistoryRef   = useRef([]);
-  const chromaAccumRef   = useRef(new Float64Array(12));
-  const analysisTimerRef = useRef(null);
-  const consecutiveRef   = useRef({ id: null, count: 0 });
+  const micStreamRef        = useRef(null);
+  const audioCtxRef         = useRef(null);
+  const analyserRef         = useRef(null);
+  const sourceRef           = useRef(null); // store MediaStreamSource for proper cleanup
+  const prevSpectrumRef     = useRef(null);
+  const fluxHistoryRef      = useRef([]);
+  const chromaAccumRef      = useRef(new Float64Array(12));
+  const spectralCentroidRef = useRef({ sum: 0, count: 0 }); // for brightness matching
+  const rmsEnergyRef        = useRef({ sum: 0, count: 0 });  // for energy matching
+  const analysisTimerRef    = useRef(null);
+  const consecutiveRef      = useRef({ id: null, count: 0 });
   const setListRef       = useRef(null);
   const audioRef         = useRef(new Audio());
   const inputRef         = useRef(null);
@@ -590,6 +593,8 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
     return () => {
       a.pause(); a.src = '';
       clearTimeout(analysisTimerRef.current);
+      sourceRef.current?.disconnect();
+      sourceRef.current = null;
       micStreamRef.current?.getTracks().forEach(t => t.stop());
       audioCtxRef.current?.close().catch(() => {});
     };
@@ -680,14 +685,19 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
   // ── Listen (audio fingerprinting) ────────────────────────────────────────
   const stopListening = useCallback(() => {
     clearTimeout(analysisTimerRef.current);
+    // Disconnect source node first — this is what releases the browser mic indicator
+    sourceRef.current?.disconnect();
+    sourceRef.current = null;
     micStreamRef.current?.getTracks().forEach(t => t.stop());
-    audioCtxRef.current?.close().catch(() => {});
     micStreamRef.current = null;
+    audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current  = null;
     analyserRef.current  = null;
     prevSpectrumRef.current = null;
     fluxHistoryRef.current  = [];
     chromaAccumRef.current  = new Float64Array(12);
+    spectralCentroidRef.current = { sum: 0, count: 0 };
+    rmsEnergyRef.current        = { sum: 0, count: 0 };
     setListenState('idle');
   }, []);
 
@@ -752,6 +762,7 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
       const ctx = new AudioContext();
       audioCtxRef.current = ctx;
       const source = ctx.createMediaStreamSource(stream);
+      sourceRef.current = source; // store so stopListening can disconnect it
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 4096;
       source.connect(analyser);

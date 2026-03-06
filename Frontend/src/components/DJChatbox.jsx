@@ -4,6 +4,18 @@ import { apiClient } from '../api/apiClient';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
+// ── Play/Pause icons ───────────────────────────────────────────────────────
+const IconPlayFill = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <polygon points="5,3 19,12 5,21" />
+  </svg>
+);
+const IconPauseFill = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" />
+  </svg>
+);
+
 // ── SVG Icons ─────────────────────────────────────────────────────────────
 const IconSend = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -164,8 +176,7 @@ function AlbumArt({ title, artist, directUrl, size = 48 }) {
 }
 
 // ── Track card ─────────────────────────────────────────────────────────────
-function TrackCard({ rank, track, score, source, onClick, onFindSimilar }) {
-  const [audioError, setAudioError] = useState(false);
+function TrackCard({ rank, track, score, source, onClick, onFindSimilar, isPlaying, onPlay }) {
   const direction = source ? describeDirection(source, track) : null;
 
   const meta = [];
@@ -215,8 +226,26 @@ function TrackCard({ rank, track, score, source, onClick, onFindSimilar }) {
         {String(rank).padStart(2, '0')}
       </div>
 
-      {/* Album art */}
-      <AlbumArt title={track.title} artist={track.artist} directUrl={track.album_art_url || null} size={46} />
+      {/* Album art with play overlay */}
+      <div
+        style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', width: 46, height: 46 }}
+        onClick={e => { e.stopPropagation(); onPlay?.(track); }}
+      >
+        <AlbumArt title={track.title} artist={track.artist} directUrl={track.album_art_url || null} size={46} />
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: isPlaying ? 'rgba(5,5,7,0.52)' : 'rgba(5,5,7,0)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          transition: '120ms ease',
+        }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(5,5,7,0.52)'; e.currentTarget.querySelector('div').style.opacity = '1'; }}
+          onMouseLeave={e => { if (!isPlaying) { e.currentTarget.style.background = 'rgba(5,5,7,0)'; e.currentTarget.querySelector('div').style.opacity = '0'; }}}
+        >
+          <div style={{ color: isPlaying ? '#a855f7' : '#e2e8f0', opacity: isPlaying ? 1 : 0, transition: '120ms ease' }}>
+            {isPlaying ? <IconPauseFill /> : <IconPlayFill />}
+          </div>
+        </div>
+      </div>
 
       {/* Main info */}
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -312,21 +341,6 @@ function TrackCard({ rank, track, score, source, onClick, onFindSimilar }) {
         <SimBar score={score} />
       </div>
 
-      {/* Audio */}
-      <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
-        {(track.audio_url || track.trackid) && !audioError ? (
-          <audio
-            controls
-            src={track.audio_url || `${API_BASE}/tracks/${track.trackid}/audio`}
-            onError={() => setAudioError(true)}
-            style={{ width: 120, height: 28, accentColor: '#7c3aed', opacity: 0.7 }}
-          />
-        ) : (
-          <div style={{ fontSize: 9, color: '#2d3748', fontFamily: 'monospace', width: 50, textAlign: 'center' }}>
-            {track.trackid ? 'NO AUDIO' : '—'}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -371,7 +385,7 @@ function CandidateBar({ candidates, onSelect }) {
 }
 
 // ── Search results ─────────────────────────────────────────────────────────
-function SearchResults({ result, source, onTrackClick, onFindSimilar, onCandidateSelect }) {
+function SearchResults({ result, source, onTrackClick, onFindSimilar, onCandidateSelect, playingId, onPlay }) {
   if (!result) return null;
   const isSimilar = result.intent === 'find_similar_track';
 
@@ -460,6 +474,8 @@ function SearchResults({ result, source, onTrackClick, onFindSimilar, onCandidat
             source={isSimilar && i === 0 ? null : (isSimilar ? result.tracks[0] : source)}
             onClick={onTrackClick}
             onFindSimilar={onFindSimilar}
+            isPlaying={playingId === String(track.trackid)}
+            onPlay={onPlay}
           />
         </React.Fragment>
       ))}
@@ -512,8 +528,32 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
   const [result,      setResult]      = useState(null);
   const [errorMsg,    setErrorMsg]    = useState('');
   const [history,     setHistory]     = useState([]);
+  const [playingId,   setPlayingId]   = useState(null);
   const inputRef   = useRef(null);
   const resultsRef = useRef(null);
+  const chatAudioRef = useRef(new Audio());
+
+  // Audio lifecycle for search results
+  useEffect(() => {
+    const a = chatAudioRef.current;
+    a.onended = () => setPlayingId(null);
+    return () => { a.pause(); a.src = ''; };
+  }, []);
+
+  const handlePlay = useCallback((track) => {
+    const id  = String(track.trackid);
+    const src = track.audio_url || `${API_BASE}/tracks/${track.trackid}/audio`;
+    const a   = chatAudioRef.current;
+    if (playingId === id) {
+      a.pause();
+      setPlayingId(null);
+    } else {
+      a.pause();
+      a.src = src;
+      a.play().catch(() => {});
+      setPlayingId(id);
+    }
+  }, [playingId]);
 
   useEffect(() => {
     if (isOpen && !isMinimised) setTimeout(() => inputRef.current?.focus(), 120);
@@ -830,6 +870,8 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
               onTrackClick={onTrackSelect}
               onFindSimilar={handleFindSimilarInChat}
               onCandidateSelect={handleCandidateSelect}
+              playingId={playingId}
+              onPlay={handlePlay}
             />
           </div>
 
