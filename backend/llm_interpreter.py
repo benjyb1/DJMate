@@ -42,6 +42,141 @@ class AvailableTags:
 
 
 # ---------------------------------------------------------------------------
+# Tool definitions for LLM function-calling.
+# The LLM decides which tools to call based on the query — it never has to
+# fill in a fixed JSON schema, so optional fields are truly optional.
+# ---------------------------------------------------------------------------
+_SEARCH_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "set_genre",
+            "description": (
+                "Call this when the user names a music genre or style. "
+                "Use the primary genre with high confidence (0.85-1.0). "
+                "Also include closely related/neighbouring genres at lower confidence "
+                "(0.3-0.65) so the search can widen naturally when not enough results are found. "
+                "Genre names MUST match entries from the Genres/Styles list exactly. "
+                "Do NOT put mood/vibe words here."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "genres": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name":       {"type": "string", "description": "Exact genre name from the available list"},
+                                "confidence": {"type": "number", "description": "0.85-1.0 for the named genre; 0.3-0.65 for related genres"},
+                            },
+                            "required": ["name", "confidence"],
+                        },
+                    }
+                },
+                "required": ["genres"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_vibe",
+            "description": (
+                "Call this when the user uses adjectives, moods, or atmosphere words. "
+                "Every descriptor that is NOT a genre name goes here: dark, warm, hypnotic, "
+                "bouncy, euphoric, groovy, driving, aggressive, melancholic, etc. "
+                "Use the named vibe with high confidence (0.85-1.0). "
+                "Also include closely related vibes at lower confidence (0.3-0.65) for widening. "
+                "Vibe names MUST match entries from the Vibes list exactly. "
+                "Do NOT put genre names here. NEVER convert a vibe into a genre."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vibes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name":       {"type": "string", "description": "Exact vibe name from the available list"},
+                                "confidence": {"type": "number", "description": "0.85-1.0 for the named vibe; 0.3-0.65 for related vibes"},
+                            },
+                            "required": ["name", "confidence"],
+                        },
+                    }
+                },
+                "required": ["vibes"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_energy",
+            "description": (
+                "Call this when you can infer an energy level from the user's request. "
+                "Energy is on a 0.0-1.0 scale. Common mappings: "
+                "'absolute banger'/'peak time'/'kicking' -> [0.85, 1.0]; "
+                "'high energy'/'banging' -> [0.75, 0.95]; "
+                "'energetic'/'driving' -> [0.6, 0.85]; "
+                "'mid-set'/'groovy' -> [0.45, 0.7]; "
+                "'after hours'/'late night' -> [0.35, 0.6]; "
+                "'closing'/'come-down' -> [0.25, 0.55]; "
+                "'warm-up'/'chill' -> [0.05, 0.35]. "
+                "Also call this for adjectives like 'banger', 'kicking', 'mellow', 'laid-back', 'deep'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "min": {"type": "number", "description": "Minimum energy 0.0-1.0"},
+                    "max": {"type": "number", "description": "Maximum energy 0.0-1.0"},
+                },
+                "required": ["min", "max"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_bpm",
+            "description": (
+                "Call this ONLY when the user explicitly states a BPM or tempo number. "
+                "e.g. '140 BPM', 'around 128', '130 to 135 bpm'. "
+                "Do NOT infer BPM from genre alone."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "min": {"type": "number", "description": "Minimum BPM"},
+                    "max": {"type": "number", "description": "Maximum BPM"},
+                },
+                "required": ["min", "max"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_track_count",
+            "description": (
+                "Call this ONLY when the user explicitly says how many tracks they want. "
+                "e.g. 'give me 5 songs', 'I want 8 tracks', '3 tunes'. "
+                "Do NOT call this if no count is mentioned — the default of 5 will be used."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "count": {"type": "integer", "description": "Number of tracks (1-20)"},
+                },
+                "required": ["count"],
+            },
+        },
+    },
+]
+
+
+# ---------------------------------------------------------------------------
 # Relaxation ladder — each step lowers the confidence threshold for
 # which tags/vibes are included in the DB query.
 # Scoring always uses the full confidence map; only the query widens.
@@ -193,18 +328,41 @@ class SemanticInterpreter:
         logger.info(f"🎯 Intent: {intent} — '{natural_query}'")
 
         # ── Step 2: route ─────────────────────────────────────────────────────
-        try:
-            if intent == "find_similar_track":
+        if intent == "find_similar_track":
+            try:
                 return await self._interpret_find_similar(natural_query, intent_result, context)
-            else:
-                # vibe_genre_search or transition_from_current both go through
-                # the standard tag-scoring path
-                system_prompt = self._build_system_prompt(context, intent=intent)
-                user_prompt   = self._build_user_prompt(natural_query)
-                parsed   = await self._generate_with_fallback(system_prompt, user_prompt)
-                validated = await self._validate_and_enhance(parsed, context)
-                validated["intent"] = intent
-                return validated
+            except Exception as e:
+                logger.error(f"find_similar_track failed: {e}")
+                result = await self._fallback_interpretation(natural_query, context)
+                result["intent"] = intent
+                return result
+
+        # vibe_genre_search or transition_from_current:
+        # Primary path — tool calling (LLM decides which tools to call)
+        user_prompt = self._build_user_prompt(natural_query)
+        try:
+            system_prompt = self._build_system_prompt_tools(context, intent=intent)
+            params = await self._generate_with_tools(system_prompt, user_prompt)
+            params["intent"] = intent
+            params.setdefault("track_count", 5)
+            params.setdefault("confidence",  0.9)
+            # Widen BPM range if too narrow
+            if params.get("bpm_range"):
+                lo, hi = params["bpm_range"]
+                if hi - lo < 6:
+                    mid = (lo + hi) / 2
+                    params["bpm_range"] = [max(1, mid - 4), mid + 4]
+            return params
+        except Exception as e:
+            logger.warning(f"Tool-calling failed ({e}), falling back to JSON interpretation")
+
+        # Fallback path — single JSON blob (old approach)
+        try:
+            system_prompt = self._build_system_prompt(context, intent=intent)
+            parsed    = await self._generate_with_fallback(system_prompt, user_prompt)
+            validated = await self._validate_and_enhance(parsed, context)
+            validated["intent"] = intent
+            return validated
         except Exception as e:
             logger.error(f"All LLM providers failed: {e}")
             result = await self._fallback_interpretation(natural_query, context)
@@ -636,22 +794,41 @@ OUTPUT — valid JSON only:
         has_tags   = bool(tag_scores)
         has_vibes  = bool(vibe_scores)
 
+        # Dynamic weights: if request is vibe-only, vibe should dominate.
+        # If request is genre-only, tags should dominate.
+        total_tag_confidence  = sum(tag_scores.values())  if has_tags  else 0.0
+        total_vibe_confidence = sum(vibe_scores.values()) if has_vibes else 0.0
+        if has_vibes and not has_tags:
+            tag_weight  = 0.10
+            vibe_weight = 0.65
+        elif has_tags and not has_vibes:
+            tag_weight  = 0.60
+            vibe_weight = 0.10
+        elif has_tags and has_vibes and total_vibe_confidence > total_tag_confidence:
+            # Vibe-led mixed query
+            tag_weight  = 0.30
+            vibe_weight = 0.50
+        else:
+            # Genre-led or balanced mixed query
+            tag_weight  = 0.45
+            vibe_weight = 0.35
+
         scored = []
         for t in tracks:
             score = 0.0
 
-            # ── Tag score (0–0.45) ────────────────────────────────────────────
+            # ── Tag score ─────────────────────────────────────────────────────
             if has_tags:
                 track_tags = [tg.lower() for tg in (t.get("semantic_tags") or [])]
                 tag_hit    = sum(tag_scores_lower.get(tg, 0.0) for tg in track_tags)
-                score     += (tag_hit / max_tag_score) * 0.45
+                score     += (tag_hit / max_tag_score) * tag_weight
 
-            # ── Vibe score (0–0.35) ───────────────────────────────────────────
+            # ── Vibe score ────────────────────────────────────────────────────
             if has_vibes:
                 tv = t.get("vibe") or []
                 track_vibes = [v.lower() for v in (tv if isinstance(tv, list) else [tv])]
                 vibe_hit    = sum(vibe_scores_lower.get(v, 0.0) for v in track_vibes)
-                score      += (vibe_hit / max_vibe_score) * 0.35
+                score      += (vibe_hit / max_vibe_score) * vibe_weight
 
             # ── Energy proximity (0–0.12) ─────────────────────────────────────
             if has_energy and t.get("energy") is not None:
@@ -894,9 +1071,202 @@ OUTPUT — valid JSON only:
 
         raise RuntimeError("All configured LLM providers failed.")
 
+    async def _generate_with_tools(self, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
+        """
+        Call the LLM with tool-calling enabled. The LLM decides which tools to
+        invoke based on what the query actually needs — no required fields.
+        Falls back provider-by-provider on any failure.
+        """
+        attempts    = 0
+        current_idx = self.active_provider_index
+
+        while attempts < len(self.providers):
+            provider = self.providers[current_idx]
+            try:
+                response = await provider["client"].chat.completions.create(
+                    model=provider["model"],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": user_prompt},
+                    ],
+                    tools=_SEARCH_TOOLS,
+                    tool_choice="auto",
+                    temperature=0.1,
+                    timeout=15.0,
+                )
+                msg        = response.choices[0].message
+                tool_calls = msg.tool_calls or []
+
+                if not tool_calls:
+                    logger.warning(f"⚠️  {provider['name']} returned no tool calls — skipping")
+                    current_idx = (current_idx + 1) % len(self.providers)
+                    attempts += 1
+                    continue
+
+                if current_idx != self.active_provider_index:
+                    logger.info(f"✅ Switched active provider to {provider['name']}")
+                    self.active_provider_index = current_idx
+
+                params = self._parse_tool_calls(tool_calls)
+                params["model_used"] = f"{provider['name']} ({provider['model']})"
+                params["confidence"] = 0.9
+                params["reasoning"]  = (
+                    f"Tools called: {', '.join(c.function.name for c in tool_calls)}"
+                )
+                return params
+
+            except (APITimeoutError, APIConnectionError, RateLimitError) as e:
+                logger.warning(f"⚠️  {provider['name']} unavailable ({type(e).__name__}), switching…")
+            except Exception as e:
+                logger.warning(f"⚠️  {provider['name']} tool-call error: {e}, switching…")
+
+            current_idx = (current_idx + 1) % len(self.providers)
+            attempts   += 1
+
+        raise RuntimeError("All providers failed tool calling.")
+
+    def _parse_tool_calls(self, tool_calls) -> Dict[str, Any]:
+        """
+        Convert LLM tool calls into the search params dict consumed by search().
+        Handles fuzzy rescue for names not in DB, and normalises energy to 0-1.
+        """
+        tag_lower  = {t.lower(): t for t in self.available_tags.semantic_tags}
+        vibe_lower = {v.lower(): v for v in self.available_tags.vibes}
+
+        params: Dict[str, Any] = {
+            "tag_scores":    {},
+            "vibe_scores":   {},
+            "energy_range":  None,
+            "bpm_range":     None,
+            "track_count":   5,
+        }
+
+        for call in tool_calls:
+            fn   = call.function.name
+            try:
+                args = json.loads(call.function.arguments)
+            except (json.JSONDecodeError, AttributeError) as e:
+                logger.warning(f"  Could not parse args for {fn}: {e}")
+                continue
+
+            if fn == "set_genre":
+                for g in args.get("genres", []):
+                    name = g.get("name", "")
+                    conf = float(g.get("confidence", 0.5))
+                    canonical = tag_lower.get(name.lower())
+                    if canonical:
+                        params["tag_scores"][canonical] = round(conf, 3)
+                    else:
+                        rescued = self._fuzzy_rescue(name, tag_lower, conf)
+                        if rescued:
+                            canon, score = rescued
+                            params["tag_scores"][canon] = max(
+                                params["tag_scores"].get(canon, 0.0), score
+                            )
+                        else:
+                            logger.warning(f"  set_genre: '{name}' not in DB, discarded")
+
+            elif fn == "set_vibe":
+                for v in args.get("vibes", []):
+                    name = v.get("name", "")
+                    conf = float(v.get("confidence", 0.5))
+                    canonical = vibe_lower.get(name.lower())
+                    if canonical:
+                        params["vibe_scores"][canonical] = round(conf, 3)
+                    else:
+                        rescued = self._fuzzy_rescue(name, vibe_lower, conf)
+                        if rescued:
+                            canon, score = rescued
+                            params["vibe_scores"][canon] = max(
+                                params["vibe_scores"].get(canon, 0.0), score
+                            )
+                        else:
+                            logger.warning(f"  set_vibe: '{name}' not in DB, discarded")
+
+            elif fn == "set_energy":
+                lo = float(args.get("min", 0.5))
+                hi = float(args.get("max", 0.8))
+                # Clamp to DB scale [0, 1]
+                params["energy_range"] = [
+                    round(max(0.0, min(1.0, lo)), 3),
+                    round(max(0.0, min(1.0, hi)), 3),
+                ]
+
+            elif fn == "set_bpm":
+                params["bpm_range"] = [
+                    float(args.get("min", 120)),
+                    float(args.get("max", 140)),
+                ]
+
+            elif fn == "set_track_count":
+                params["track_count"] = max(1, min(20, int(args.get("count", 5))))
+
+        # Flat lists for backwards compat with existing search/scoring code
+        params["semantic_tags"] = list(params["tag_scores"].keys())
+        params["vibes"]         = list(params["vibe_scores"].keys())
+        params["interpretation_method"] = "tool_calls"
+
+        logger.info(
+            f"🛠️  Tool params — tags: {params['tag_scores']}, "
+            f"vibes: {params['vibe_scores']}, "
+            f"energy: {params['energy_range']}, "
+            f"bpm: {params['bpm_range']}, "
+            f"count: {params['track_count']}"
+        )
+        return params
+
     # -------------------------------------------------------------------------
     # Prompts
     # -------------------------------------------------------------------------
+
+    def _build_system_prompt_tools(
+            self,
+            context: Optional[InterpretationContext],
+            intent: str = "vibe_genre_search",
+    ) -> str:
+        """
+        Concise system prompt for the tool-calling path.
+        The tool schemas carry the structural rules, so this just explains
+        the DJ context and which tool to use for what.
+        """
+        semantic_tags_list = sorted(self.available_tags.semantic_tags)
+        vibes_list         = sorted(self.available_tags.vibes)
+
+        context_info       = ""
+        transition_note    = ""
+        if context and context.current_track:
+            t = context.current_track
+            context_info = (
+                f"\nCurrently playing: {t.get('title','?')} by {t.get('artist','?')}"
+                f"\n  Genre tags: {t.get('semantic_tags') or []}"
+                f"  Vibes: {t.get('vibe_descriptors') or []}"
+                f"  Energy: {t.get('energy','?')}  BPM: {t.get('bpm','?')}\n"
+            )
+            if intent == "transition_from_current":
+                transition_note = (
+                    "\nTRANSITION REQUEST: use the current track as your baseline. "
+                    "Shift genre/vibe/energy in the direction the user indicates. "
+                    "Preserve tags/vibes that are compatible with the new direction.\n"
+                )
+
+        return f"""You are an expert DJ assistant. Use the provided tools to define what music to search for.
+{context_info}{transition_note}
+AVAILABLE GENRES (use these exact names in set_genre):
+{json.dumps(semantic_tags_list)}
+
+AVAILABLE VIBES (use these exact names in set_vibe):
+{json.dumps(vibes_list)}
+
+RULES:
+- Genre words (house, techno, drum and bass, ambient…) → set_genre
+- Adjective/mood/atmosphere words (dark, warm, bouncy, driving…) → set_vibe
+- Genre and vibe are INDEPENDENT axes. Never put a vibe in set_genre or vice versa.
+- Always include related genres/vibes at lower confidence for natural search widening.
+- Energy comes from context words: "banger", "kicking", "peak time" → set_energy high;
+  "chill", "warm-up", "after hours" → set_energy lower.
+- Only call set_bpm when user explicitly states a BPM number.
+- Only call set_track_count when user explicitly states how many tracks they want.
+- If an aspect is not mentioned, do not call that tool."""
 
     def _build_system_prompt(
             self,
@@ -932,29 +1302,51 @@ Genres/Styles : {json.dumps(semantic_tags_list)}
 Vibes         : {json.dumps(vibes_list)}
 
 TASK:
-Map the user's request to tags/vibes from the lists above using CONFIDENCE SCORES (0.0–1.0).
+The user's request has TWO independent axes — GENRE and VIBE. Extract both separately.
 
-CRITICAL RULES — read carefully:
-1. ONLY output tag/vibe names that appear VERBATIM in the lists above.
-   Any name not in the list will be silently discarded and the search will fail.
-2. ALWAYS remap emotional descriptors the user uses to the closest available vibe.
-   If the user says "bittersweet" and that word is not in the Vibes list, pick the
-   closest available vibes (e.g. "emotional", "melancholic", "moody", "dark", "warm").
-   Never leave vibe_scores empty — always find the best available approximation.
-3. If the user says "nostalgic", map to available vibes like "warm", "soulful", "emotional".
-   If the user says "euphoric", map to available vibes like "uplifting", "euphoric", "energetic".
-   If the user says "intense", map to available vibes like "driving", "dark", "aggressive".
-   Always pick from the list — never invent a new word.
-4. Score reflects closeness of match: exact match → 0.9+, rough approximation → 0.4–0.6.
-5. Include nearby tags that fit the vibe even if not mentioned (with lower scores).
-6. Energy range is on a 1–10 scale (1=very chill, 10=absolute peak time).
-   Infer from context: "upbeat"→[6,8], "dark moody"→[4,7], "peak time"→[8,10],
-   "warm-up"→[2,5], "closing"→[7,9], "after hours"→[5,8], "bittersweet"→[4,6]
-7. A messy query like "fast kicking house" might map:
-    tag_scores:  {{"house": 0.9, "tech house": 0.75, "minimal techno": 0.3}}
-    vibe_scores: {{"energetic": 0.9, "driving": 0.8, "dark": 0.2}}
-    energy_range: [7, 9]
-8. "give me 6 tracks" → track_count: 6  |  no count mentioned → track_count: 5
+GENRE AXIS → tag_scores:
+  Every word that names a musical genre or style belongs here.
+  Genres are things like: house, techno, drum and bass, ambient, acid, trance, minimal, etc.
+  - The named genre gets a high score (0.85–1.0).
+  - Also add closely related/neighbouring genres at lower scores (0.3–0.65) so the search
+    can widen naturally when not enough exact matches are found. E.g. "house" → also include
+    "tech house", "deep house", "garage" at lower scores.
+  - NEVER put vibe/mood words in tag_scores.
+
+VIBE AXIS → vibe_scores:
+  Every adjective, mood, atmosphere, or feeling word belongs here.
+  Vibes are things like: dark, bouncy, warm, hypnotic, groovy, driving, euphoric, etc.
+  - The named vibe gets a high score (0.85–1.0).
+  - Also add closely related vibes at lower scores (0.3–0.65) for widening. E.g. "dark" →
+    also include "mysterious", "hypnotic", "moody" at lower scores.
+  - NEVER put genre words in vibe_scores.
+  - NEVER convert a vibe into a genre. "Warm" is NOT "house". "Dark" is NOT "techno".
+
+THE TWO AXES ARE COMPLETELY INDEPENDENT. Do not let genre influence vibe_scores or vice versa.
+
+CRITICAL RULES:
+1. ONLY output names that appear VERBATIM in the Genres/Styles or Vibes lists above.
+   Any name not in the list is silently discarded and hurts the search.
+2. If a vibe word the user uses is not in the Vibes list, map it to the closest available vibe.
+   Never leave vibe_scores empty when the user describes a mood — always approximate.
+   e.g. "bittersweet" → "melancholic", "emotional"; "intense" → "driving", "aggressive"
+3. If no genre is mentioned, leave tag_scores empty {{}}.
+   If no vibe is mentioned, leave vibe_scores empty {{}}.
+4. Score reflects how close the match is: exact match → 0.9+, neighbour → 0.4–0.65, rough → 0.2–0.4.
+5. Energy range is on a 1–10 scale (1=very chill, 10=absolute peak time).
+   Infer from context: "kicking"→[7,9], "banging"→[8,10], "peak time"→[8,10],
+   "dark moody"→[4,7], "warm-up"→[2,5], "after hours"→[5,8], "bittersweet"→[4,6]
+6. Examples of correct output:
+   "kicking techno" →
+     tag_scores:  {{"techno": 0.9, "minimal techno": 0.5, "industrial techno": 0.4}}
+     vibe_scores: {{"driving": 0.85, "aggressive": 0.6, "energetic": 0.5}}
+   "dark but bouncy house" →
+     tag_scores:  {{"house": 0.9, "tech house": 0.6, "deep house": 0.4}}
+     vibe_scores: {{"dark": 0.9, "bouncy": 0.85, "groovy": 0.5, "mysterious": 0.4}}
+   "something warm and late night" (no genre) →
+     tag_scores:  {{}}
+     vibe_scores: {{"warm": 0.9, "late night": 0.85, "soulful": 0.5, "groovy": 0.4}}
+7. "give me 6 tracks" → track_count: 6  |  no count mentioned → track_count: 5
 
 OUTPUT — valid JSON only, no markdown:
 {{
