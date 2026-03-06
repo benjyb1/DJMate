@@ -160,23 +160,78 @@ function keyCompatibility(key1, key2) {
   return 0.15;
 }
 
-// ── Audio fingerprint helpers ─────────────────────────────────────────────
+// ── MFCC fingerprint helpers (matches Python compute_audio_fingerprints.py) ─
+// HTK mel scale: m = 2595 * log10(1 + f/700)
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 
-function detectBPMFromFlux(flux, frameRate) {
-  const minLag = Math.round(frameRate * 60 / 180);
-  const maxLag = Math.round(frameRate * 60 / 70);
-  let bestLag = minLag, bestCorr = -Infinity;
-  const n = flux.length;
-  for (let lag = minLag; lag <= maxLag && lag < n / 2; lag++) {
-    let corr = 0, count = 0;
-    for (let i = 0; i < n - lag; i++) { corr += flux[i] * flux[i + lag]; count++; }
-    corr /= count || 1;
-    if (corr > bestCorr) { bestCorr = corr; bestLag = lag; }
-  }
-  return Math.round(60 * frameRate / bestLag);
+function hzToMel(f)  { return 2595 * Math.log10(1 + f / 700); }
+function melToHz(m)  { return 700 * (Math.pow(10, m / 2595) - 1); }
+
+/**
+ * Build a 40-band mel filterbank matching librosa with htk=True.
+ * sr       – AudioContext sample rate (44100 or 48000)
+ * fftSize  – analyser.fftSize (4096)
+ * Returns  – Float32Array[40][nBins] weight matrix
+ */
+function buildMelFilterbank(sr, fftSize, nMels = 40, fmin = 20, fmax = 8000) {
+  const nBins  = Math.floor(fftSize / 2) + 1;
+  const melMin = hzToMel(fmin);
+  const melMax = hzToMel(fmax);
+  // nMels+2 evenly-spaced points on the mel axis
+  const melPts = Array.from({ length: nMels + 2 }, (_, i) =>
+    melMin + (melMax - melMin) * i / (nMels + 1));
+  const hzPts  = melPts.map(melToHz);
+  const binPts = hzPts.map(hz => Math.min(nBins - 1, Math.floor(hz * fftSize / sr)));
+
+  return Array.from({ length: nMels }, (_, m) => {
+    const row = new Float32Array(nBins);
+    const lo = binPts[m], mid = binPts[m + 1], hi = binPts[m + 2];
+    for (let k = lo; k < mid; k++) row[k] = (k - lo) / Math.max(1, mid - lo);
+    for (let k = mid; k < hi;  k++) row[k] = (hi - k) / Math.max(1, hi - mid);
+    return row;
+  });
 }
 
+/**
+ * Compute 13 MFCC coefficients from a Float32Array of dBFS FFT data.
+ * Uses ortho DCT-II to match scipy/librosa output.
+ */
+function computeMFCC(floatFreqData, filterbank, nMFCC = 13) {
+  const nMels = filterbank.length;
+  // Apply mel filterbank on linear power, then log-compress
+  const logMel = filterbank.map(row => {
+    let e = 0;
+    for (let k = 0; k < row.length; k++) {
+      const linearAmp = Math.pow(10, floatFreqData[k] / 20); // dBFS → amplitude
+      e += row[k] * linearAmp * linearAmp;                   // → power
+    }
+    return Math.log(Math.max(e, 1e-10));
+  });
+  // Ortho DCT-II  (matches scipy.fft.dct norm='ortho')
+  return Array.from({ length: nMFCC }, (_, n) => {
+    let s = 0;
+    for (let m = 0; m < nMels; m++)
+      s += logMel[m] * Math.cos(Math.PI * n * (m + 0.5) / nMels);
+    return s * (n === 0 ? Math.sqrt(1 / nMels) : Math.sqrt(2 / nMels));
+  });
+}
+
+/** Cosine similarity between two equal-length arrays. */
+function cosine(a, b) {
+  let dot = 0, ma = 0, mb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; ma += a[i] * a[i]; mb += b[i] * b[i]; }
+  return (ma > 0 && mb > 0) ? dot / (Math.sqrt(ma) * Math.sqrt(mb)) : 0;
+}
+
+/** Mean-centre then L2-normalise an array.  Returns a plain Array. */
+function normaliseMFCC(v) {
+  const mean = v.reduce((s, x) => s + x, 0) / v.length;
+  const c    = v.map(x => x - mean);
+  const norm = Math.sqrt(c.reduce((s, x) => s + x * x, 0));
+  return norm > 1e-10 ? c.map(x => x / norm) : c;
+}
+
+/** Detect key from accumulated chroma (kept for display only). */
 function estimateKeyFromChroma(chroma) {
   const maxC = Math.max(...chroma);
   if (maxC <= 0) return null;
@@ -571,17 +626,20 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
   const [playingId, setPlayingId]         = useState(null);
   const [anchorTrack, setAnchorTrack]     = useState(null); // track to explore from
 
-  const micStreamRef        = useRef(null);
-  const audioCtxRef         = useRef(null);
-  const analyserRef         = useRef(null);
-  const sourceRef           = useRef(null); // store MediaStreamSource for proper cleanup
-  const prevSpectrumRef     = useRef(null);
-  const fluxHistoryRef      = useRef([]);
-  const chromaAccumRef      = useRef(new Float64Array(12));
-  const spectralCentroidRef = useRef({ sum: 0, count: 0 }); // for brightness matching
-  const rmsEnergyRef        = useRef({ sum: 0, count: 0 });  // for energy matching
-  const analysisTimerRef    = useRef(null);
-  const consecutiveRef      = useRef({ id: null, count: 0 });
+  const micStreamRef     = useRef(null);
+  const audioCtxRef      = useRef(null);
+  const analyserRef      = useRef(null);
+  const sourceRef        = useRef(null);          // MediaStreamSource — disconnect to release mic
+  const melFBRef         = useRef(null);          // mel filterbank matrix (built once per listen session)
+  const mfccAccumRef     = useRef(null);          // running sum of MFCC vectors (Float64Array[13])
+  const mfccFrameCountRef= useRef(0);             // how many frames contributed to the sum
+  const chromaAccumRef   = useRef(new Float64Array(12)); // kept for key display
+  const prevSpectrumRef  = useRef(null);
+  const analysisTimerRef = useRef(null);
+  const consecutiveRef   = useRef({ id: null, count: 0 });
+  // Lockout: after a song is identified, don't auto-add another for 3 minutes
+  const lockoutUntilRef  = useRef(0);
+  const lastAddedIdRef   = useRef(null);
   const setListRef       = useRef(null);
   const audioRef         = useRef(new Audio());
   const inputRef         = useRef(null);
@@ -597,6 +655,8 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
       sourceRef.current = null;
       micStreamRef.current?.getTracks().forEach(t => t.stop());
       audioCtxRef.current?.close().catch(() => {});
+      mfccAccumRef.current  = null;
+      melFBRef.current      = null;
     };
   }, []);
 
@@ -685,73 +745,91 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
   // ── Listen (audio fingerprinting) ────────────────────────────────────────
   const stopListening = useCallback(() => {
     clearTimeout(analysisTimerRef.current);
-    // Disconnect source node first — this is what releases the browser mic indicator
-    sourceRef.current?.disconnect();
-    sourceRef.current = null;
+    sourceRef.current?.disconnect();           // releases the browser mic indicator
+    sourceRef.current  = null;
     micStreamRef.current?.getTracks().forEach(t => t.stop());
     micStreamRef.current = null;
     audioCtxRef.current?.close().catch(() => {});
-    audioCtxRef.current  = null;
-    analyserRef.current  = null;
-    prevSpectrumRef.current = null;
-    fluxHistoryRef.current  = [];
+    audioCtxRef.current   = null;
+    analyserRef.current   = null;
+    melFBRef.current      = null;
+    mfccAccumRef.current  = null;
+    mfccFrameCountRef.current = 0;
     chromaAccumRef.current  = new Float64Array(12);
-    spectralCentroidRef.current = { sum: 0, count: 0 };
-    rmsEnergyRef.current        = { sum: 0, count: 0 };
+    prevSpectrumRef.current = null;
+    consecutiveRef.current  = { id: null, count: 0 };
     setListenState('idle');
+    setMatchCandidates([]);
   }, []);
 
   const performMatch = useCallback(() => {
-    const flux = fluxHistoryRef.current;
-    if (flux.length < 40) return; // need enough data
+    // ── 1. Need enough MFCC frames ──────────────────────────────────────────
+    const frameCount = mfccFrameCountRef.current;
+    if (frameCount < 60) return;  // need ~3s of data before trying
 
-    // BPM via autocorrelation
-    const frameRate = 20; // 50ms per frame = 20fps
-    const bpm = detectBPMFromFlux(flux, frameRate);
-    const clampedBPM = Math.max(70, Math.min(200, bpm));
-    setDetectedBPM(clampedBPM);
-
-    // Key from accumulated chroma
+    // ── 2. Key display (chroma — unaffected by MFCC matching) ───────────────
     const key = estimateKeyFromChroma(chromaAccumRef.current);
     if (key) setDetectedKey(key);
 
-    // Match against library
+    // ── 3. Compute live MFCC fingerprint ────────────────────────────────────
+    const accumMean = Array.from(mfccAccumRef.current).map(v => v / frameCount);
+    const liveMFCC  = normaliseMFCC(accumMean);   // mean-centred + L2-normalised
+
+    // ── 4. Score every library track that has a stored fingerprint ───────────
     const played = new Set(setList.map(t => String(t.id)));
-    const candidates = allNodes
-      .filter(n => n.bpm && !played.has(String(n.id)))
+    const scoredWithFP = allNodes
+      .filter(n => n.mfccFp && !played.has(String(n.id)))
       .map(n => {
-        const bpmDiff = Math.abs(n.bpm - clampedBPM);
-        const bpmS = Math.max(0, 1 - bpmDiff / 6);
-        const keyS = key ? keyCompatibility(n.key, key) : 0.5;
-        return { ...n, _matchScore: bpmS * 0.6 + keyS * 0.4 };
+        const score = cosine(liveMFCC, n.mfccFp);
+        return { ...n, _matchScore: score };
       })
-      .filter(n => n._matchScore > 0.35)
-      .sort((a, b) => b._matchScore - a._matchScore)
-      .slice(0, 5);
+      .sort((a, b) => b._matchScore - a._matchScore);
 
-    setMatchCandidates(candidates);
+    const top5 = scoredWithFP.slice(0, 5);
+    setMatchCandidates(top5);
 
-    // Auto-add if same top match for 3 consecutive cycles with high confidence
-    if (candidates.length > 0 && candidates[0]._matchScore > 0.7) {
-      const topId = String(candidates[0].id);
-      if (topId === consecutiveRef.current.id) {
-        consecutiveRef.current.count++;
-        if (consecutiveRef.current.count >= 3) {
-          addTrack(candidates[0]);
-          setMatchedTrack(candidates[0]);
-          consecutiveRef.current = { id: null, count: 0 };
-          // Keep listening for next track
-          setTimeout(() => setMatchedTrack(null), 3000);
+    // Update best BPM display from top match metadata
+    if (top5[0]?.bpm) setDetectedBPM(Math.round(top5[0].bpm));
+
+    // ── 5. Auto-add logic: super-strict thresholds ──────────────────────────
+    //   • Confidence must be ≥ 0.90
+    //   • Same track must be #1 for 5 consecutive 15-second windows (75 s min)
+    //   • 3-minute lockout after any identification
+    //   • Never re-add the track that was just identified
+    const now = Date.now();
+    const inLockout = now < lockoutUntilRef.current;
+
+    if (!inLockout && top5.length > 0) {
+      const best  = top5[0];
+      const topId = String(best.id);
+      // Margin check — top score must be clearly ahead of #2
+      const margin = top5.length > 1 ? (best._matchScore - top5[1]._matchScore) : 1;
+
+      if (best._matchScore >= 0.90 && margin >= 0.02 && topId !== String(lastAddedIdRef.current)) {
+        if (topId === consecutiveRef.current.id) {
+          consecutiveRef.current.count++;
+          if (consecutiveRef.current.count >= 5) {
+            // Confirmed! Add to set and start lockout
+            addTrack(best);
+            setMatchedTrack(best);
+            lastAddedIdRef.current  = best.id;
+            lockoutUntilRef.current = now + 3 * 60 * 1000;  // 3-minute lockout
+            consecutiveRef.current  = { id: null, count: 0 };
+            setTimeout(() => setMatchedTrack(null), 4000);
+          }
+        } else {
+          // New top candidate — reset counter
+          consecutiveRef.current = { id: topId, count: 1 };
         }
       } else {
-        consecutiveRef.current = { id: topId, count: 1 };
+        // Score too low or not consistent — reset
+        consecutiveRef.current = { id: null, count: 0 };
       }
-    } else {
-      consecutiveRef.current = { id: null, count: 0 };
     }
 
-    // Reset accumulators for next window
-    fluxHistoryRef.current = [];
+    // ── 6. Reset accumulators for next window ────────────────────────────────
+    mfccAccumRef.current   = new Float64Array(13);
+    mfccFrameCountRef.current = 0;
     chromaAccumRef.current = new Float64Array(12);
   }, [allNodes, setList, addTrack]);
 
@@ -759,43 +837,45 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       micStreamRef.current = stream;
+
       const ctx = new AudioContext();
       audioCtxRef.current = ctx;
+
       const source = ctx.createMediaStreamSource(stream);
-      sourceRef.current = source; // store so stopListening can disconnect it
+      sourceRef.current = source;  // stored so stopListening can disconnect it
+
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 4096;
       source.connect(analyser);
       analyserRef.current = analyser;
 
-      prevSpectrumRef.current = null;
-      fluxHistoryRef.current  = [];
-      chromaAccumRef.current  = new Float64Array(12);
-      consecutiveRef.current  = { id: null, count: 0 };
+      // Build mel filterbank once, matched to this hardware's sample rate + FFT size
+      melFBRef.current         = buildMelFilterbank(ctx.sampleRate, analyser.fftSize);
+      mfccAccumRef.current     = new Float64Array(13);
+      mfccFrameCountRef.current= 0;
+      chromaAccumRef.current   = new Float64Array(12);
+      prevSpectrumRef.current  = null;
+      consecutiveRef.current   = { id: null, count: 0 };
 
-      const FRAME_MS = 50;
-      let frameCount = 0;
-      const framesPerAnalysis = Math.round(6000 / FRAME_MS); // ~120 frames = 6 seconds
+      const FRAME_MS         = 50;                          // 50 ms per analysis frame
+      const ANALYSIS_WINDOW  = 15_000;                      // 15-second match windows
+      const framesPerWindow  = Math.round(ANALYSIS_WINDOW / FRAME_MS); // 300 frames
+      let   frameCount       = 0;
+
+      const floatData = new Float32Array(analyser.frequencyBinCount);
 
       const analyze = () => {
-        if (!analyserRef.current) return;
+        if (!analyserRef.current || !melFBRef.current) return;
 
-        // Spectral flux for BPM
-        const freqData = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteFrequencyData(freqData);
-        if (prevSpectrumRef.current) {
-          let flux = 0;
-          for (let i = 0; i < freqData.length; i++) {
-            const d = freqData[i] - prevSpectrumRef.current[i];
-            if (d > 0) flux += d;
-          }
-          fluxHistoryRef.current.push(flux);
-        }
-        prevSpectrumRef.current = Array.from(freqData);
-
-        // Accumulate chroma for key
-        const floatData = new Float32Array(analyser.frequencyBinCount);
         analyser.getFloatFrequencyData(floatData);
+
+        // ── MFCC accumulation (for fingerprint matching) ─────────────────────
+        const mfccFrame = computeMFCC(floatData, melFBRef.current);
+        const acc = mfccAccumRef.current;
+        for (let i = 0; i < 13; i++) acc[i] += mfccFrame[i];
+        mfccFrameCountRef.current++;
+
+        // ── Chroma accumulation (for key display only) ───────────────────────
         const sr = ctx.sampleRate;
         for (let i = 1; i < floatData.length; i++) {
           const freq = i * sr / analyser.fftSize;
@@ -803,12 +883,13 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
           const power = Math.pow(10, floatData[i] / 20);
           if (power <= 0 || !isFinite(power)) continue;
           const midi = 12 * Math.log2(freq / 440) + 69;
-          const bin = ((Math.round(midi) % 12) + 12) % 12;
+          const bin  = ((Math.round(midi) % 12) + 12) % 12;
           chromaAccumRef.current[bin] += power;
         }
 
         frameCount++;
-        if (frameCount % framesPerAnalysis === 0 && fluxHistoryRef.current.length > 50) {
+        // Fire match every 15 seconds
+        if (frameCount % framesPerWindow === 0) {
           performMatch();
         }
 
@@ -872,20 +953,41 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
         {/* Listen toggle */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <MicLevel analyser={analyserRef.current} active={listenState === 'listening'} />
-          {listenState === 'listening' && detectedBPM && (
+
+          {/* Live analysis readout */}
+          {listenState === 'listening' && (
             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <span style={{ fontSize: 9, color: '#00d4ff', fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.08em' }}>
-                {detectedBPM} BPM
-              </span>
+              {matchCandidates.length > 0 && (
+                <>
+                  <span style={{ fontSize: 9, color: '#94a3b8', fontFamily: "'JetBrains Mono', monospace", maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {matchCandidates[0].name}
+                  </span>
+                  <span style={{
+                    fontSize: 9, fontFamily: "'JetBrains Mono', monospace",
+                    color: matchCandidates[0]._matchScore >= 0.9 ? '#22c55e'
+                         : matchCandidates[0]._matchScore >= 0.75 ? '#f59e0b'
+                         : '#475569',
+                  }}>
+                    {Math.round(matchCandidates[0]._matchScore * 100)}%
+                  </span>
+                  {consecutiveRef.current.count > 0 && (
+                    <span style={{ fontSize: 8, color: '#a855f7', fontFamily: "'JetBrains Mono', monospace" }}>
+                      {consecutiveRef.current.count}/5
+                    </span>
+                  )}
+                </>
+              )}
               {detectedKey && (
-                <span style={{ fontSize: 9, color: '#a855f7', fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.08em' }}>
+                <span style={{ fontSize: 9, color: 'rgba(124,58,237,0.6)', fontFamily: "'JetBrains Mono', monospace" }}>
                   {detectedKey}
                 </span>
               )}
             </div>
           )}
+
+          {/* Flash on auto-add */}
           {matchedTrack && (
-            <span style={{ fontSize: 9, color: '#22c55e', fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.08em', animation: 'blink 1s ease-in-out 3' }}>
+            <span style={{ fontSize: 9, color: '#22c55e', fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.08em' }}>
               ADDED: {matchedTrack.name || matchedTrack.title}
             </span>
           )}

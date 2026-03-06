@@ -198,12 +198,13 @@ export default function App() {
         setIsLoading(true);
         const { data, error: err } = await supabase
           .from('tracks')
-          .select('trackid,title,artist,bpm,key,album_art_url,audio_url,x_coord,y_coord,z_coord,track_labels(energy,semantic_tags,vibe)');
+          .select('trackid,title,artist,bpm,key,album_art_url,audio_url,x_coord,y_coord,z_coord,track_labels(energy,semantic_tags,vibe),track_features(mfcc)');
         if (err) throw err;
         if (!data?.length) throw new Error('No tracks found in database');
 
         const nodes = data.map(t => {
-          const labels = Array.isArray(t.track_labels) ? t.track_labels[0] : t.track_labels;
+          const labels   = Array.isArray(t.track_labels)   ? t.track_labels[0]   : t.track_labels;
+          const features = Array.isArray(t.track_features) ? t.track_features[0] : t.track_features;
           return {
             id:       t.trackid,
             name:     t.title  || 'Unknown',
@@ -215,6 +216,7 @@ export default function App() {
             vibe:     labels?.vibe ?? null,
             albumArt: t.album_art_url || makeSupabaseCoverUrl(t.artist, t.title),
             audioUrl: t.audio_url || null,
+            mfccFp:   features?.mfcc ?? null,   // MFCC fingerprint for Listen matching
             x: t.x_coord || (Math.random() - 0.5) * 1000,
             y: t.y_coord || (Math.random() - 0.5) * 1000,
             z: t.z_coord || (Math.random() - 0.5) * 1000,
