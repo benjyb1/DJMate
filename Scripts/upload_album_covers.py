@@ -1,6 +1,6 @@
 import os
 import json
-import time
+import unicodedata
 from pathlib import Path
 from supabase import create_client, Client
 from mutagen import File
@@ -9,21 +9,15 @@ from mutagen.flac import FLAC
 from mutagen.mp4 import MP4
 
 from dotenv import load_dotenv
-import os
-from supabase import create_client
 
-load_dotenv()  # loads variables from .env
+load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 BUCKET_NAME = "album-covers"
-MUSIC_FOLDER = Path.home() / "Desktop" / "Mixing"
-AUDIO_EXTENSIONS = {'.mp3', '.flac', '.m4a', '.mp4', '.ogg', '.wma'}
 PROGRESS_FILE = "upload_progress_tracks.json"
-
-# ==================== SETUP ===================
 
 # ==================== UTILITIES ====================
 
@@ -37,18 +31,11 @@ def save_progress(progress):
     with open(PROGRESS_FILE, 'w') as f:
         json.dump(progress, f, indent=2)
 
-def normalise_artist(artist):
-    if not artist or not isinstance(artist, str) or not artist.strip():
-        return "unknown artist"
-    return artist.strip()
-
-def normalise_title(title):
-    if not title or not isinstance(title, str) or not title.strip():
-        return None
-    return title.strip()
-
 def create_safe_filename(artist, title):
-    safe_name = f"{artist}_{title}".lower()
+    safe_name = f"{artist}_{title}"
+    # Strip accents: é → e, ü → u, ñ → n, etc.
+    safe_name = unicodedata.normalize("NFKD", safe_name).encode("ascii", "ignore").decode("ascii")
+    safe_name = safe_name.lower()
     safe_name = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in safe_name)
     safe_name = '_'.join(filter(None, safe_name.split('_')))
     return safe_name[:150]
@@ -79,35 +66,6 @@ def extract_album_art(audio_path):
 
     return None
 
-def get_track_info(audio_path):
-    try:
-        audio = File(audio_path)
-        if audio is None or not hasattr(audio, 'tags') or not audio.tags:
-            return None, None
-
-        artist = None
-        title = None
-
-        artist_keys = ['artist', 'ARTIST', 'TPE1', '©ART', 'Artist', 'TPE2', 'albumartist']
-        title_keys = ['title', 'TITLE', 'TIT2', '©nam', 'Title']
-
-        for key in artist_keys:
-            if key in audio.tags:
-                val = audio.tags[key]
-                artist = str(val[0]) if isinstance(val, list) else str(val)
-                break
-
-        for key in title_keys:
-            if key in audio.tags:
-                val = audio.tags[key]
-                title = str(val[0]) if isinstance(val, list) else str(val)
-                break
-
-        return normalise_artist(artist), normalise_title(title)
-
-    except Exception:
-        return None, None
-
 # ==================== UPLOAD ====================
 
 def upload_album_art(image_data, filename):
@@ -121,110 +79,84 @@ def upload_album_art(image_data, filename):
         )
 
         url_response = supabase.storage.from_(BUCKET_NAME).get_public_url(file_path)
-        return url_response['data']['publicUrl']
+        if isinstance(url_response, dict):
+            return url_response.get('data', {}).get('publicUrl') or url_response.get('publicUrl')
+        return url_response
 
     except Exception as e:
-        print(f"❌ Upload error: {e}")
+        print(f"  Upload error: {e}")
         return None
 
 # ==================== MAIN PROCESS ====================
 
 def process_all_tracks():
     progress = load_progress()
-    track_art_map = progress.get('uploaded_tracks', {})
+    done_ids = set(progress.get('done_trackids', []))
+    print(f"Progress: {len(done_ids)} tracks already processed\n")
 
-    # Step 1: Normalise any legacy keys in the progress file
-    normalised_map = {}
-    for key, value in track_art_map.items():
-        parts = key.split("_", 1)
-        if len(parts) == 2:
-            artist, title = parts
-        else:
-            continue
-        artist = normalise_artist(artist)
-        title  = normalise_title(title)
-        if title:
-            new_key = f"{artist}_{title}".lower()
-            normalised_map[new_key] = value
-    track_art_map = normalised_map
-    save_progress({'uploaded_tracks': track_art_map})
-    print(f"Progress file: {len(track_art_map)} covers already uploaded\n")
+    # Fetch all tracks that have a filepath but no album_art_url
+    response = supabase.table('tracks').select('trackid, artist, title, filepath, album_art_url').execute()
+    db_tracks = response.data
+    print(f"{len(db_tracks)} tracks in DB")
 
-    # Step 2: Scan music folder and upload any missing covers
-    print(f"Scanning: {MUSIC_FOLDER}")
-    audio_files = [
-        p for p in MUSIC_FOLDER.rglob("*")
-        if p.suffix.lower() in AUDIO_EXTENSIONS
+    to_process = [
+        t for t in db_tracks
+        if t.get('filepath')
+        and not t.get('album_art_url')
+        and str(t['trackid']) not in done_ids
     ]
-    print(f"Found {len(audio_files)} audio files\n")
+    already_have = sum(1 for t in db_tracks if t.get('album_art_url'))
+    print(f"  {already_have} already have album_art_url")
+    print(f"  {len(to_process)} need processing\n")
 
-    newly_uploaded = 0
-    scan_skipped   = 0
-    scan_no_art    = 0
+    uploaded   = 0
+    no_art     = 0
+    not_found  = 0
 
-    for audio_path in audio_files:
-        artist, title = get_track_info(audio_path)
+    for track in to_process:
+        trackid  = str(track['trackid'])
+        filepath = track['filepath']
+        artist   = track.get('artist') or 'unknown_artist'
+        title    = track.get('title')
+
         if not title:
-            scan_no_art += 1
+            no_art += 1
             continue
 
-        track_key = f"{normalise_artist(artist)}_{title}".lower()
-
-        if track_key in track_art_map:
-            scan_skipped += 1
-            continue  # already uploaded
+        audio_path = Path(filepath)
+        if not audio_path.exists():
+            print(f"  File not found: {filepath}")
+            not_found += 1
+            continue
 
         image_data = extract_album_art(audio_path)
         if not image_data:
-            scan_no_art += 1
+            # No embedded art in this file — mark as done so we skip it next run
+            done_ids.add(trackid)
+            no_art += 1
             continue
 
-        filename = create_safe_filename(normalise_artist(artist), title)
+        filename = create_safe_filename(artist, title)
         url = upload_album_art(image_data, filename)
+
         if url:
-            track_art_map[track_key] = {'url': url}
-            newly_uploaded += 1
-            if newly_uploaded % 25 == 0:
-                save_progress({'uploaded_tracks': track_art_map})
-                print(f"  Uploaded {newly_uploaded} covers so far …")
+            try:
+                supabase.table('tracks').update({'album_art_url': url}).eq('trackid', track['trackid']).execute()
+                done_ids.add(trackid)
+                uploaded += 1
+                print(f"  ✓ {artist} — {title}")
+            except Exception as e:
+                print(f"  DB error for {artist} — {title}: {e}")
+        else:
+            no_art += 1
 
-    save_progress({'uploaded_tracks': track_art_map})
-    print(f"\nScan complete — uploaded: {newly_uploaded}  "
-          f"already done: {scan_skipped}  no art in file: {scan_no_art}\n")
+        if uploaded % 25 == 0 and uploaded > 0:
+            save_progress({'done_trackids': list(done_ids)})
+            print(f"  Progress saved ({uploaded} uploaded so far)\n")
 
-    # Step 3: Update album_art_url column in DB for every track
-    print("Updating database …")
-    response  = supabase.table('tracks').select('trackid, artist, title').execute()
-    db_tracks = response.data
-    print(f"  {len(db_tracks)} tracks in DB")
+    save_progress({'done_trackids': list(done_ids)})
+    print(f"\nDone.  Uploaded: {uploaded}  No embedded art: {no_art}  File not found: {not_found}")
 
-    updated_count = 0
-    not_found     = 0
-
-    for track in db_tracks:
-        artist = normalise_artist(track.get('artist'))
-        title  = normalise_title(track.get('title'))
-        if not title:
-            not_found += 1
-            continue
-
-        track_key = f"{artist}_{title}".lower()
-        if track_key not in track_art_map:
-            not_found += 1
-            continue
-
-        url = track_art_map[track_key]['url']
-        try:
-            supabase.table('tracks').update({
-                'album_art_url': url
-            }).eq('trackid', track['trackid']).execute()
-            updated_count += 1
-            if updated_count % 50 == 0:
-                print(f"  Updated {updated_count} tracks …")
-        except Exception as e:
-            print(f"  ❌ Error updating trackid {track['trackid']}: {e}")
-
-    print(f"\n✅  Done.  DB updated: {updated_count}  No cover found: {not_found}")
 
 if __name__ == "__main__":
     process_all_tracks()

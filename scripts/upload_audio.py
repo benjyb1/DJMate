@@ -1,5 +1,6 @@
 import os
 import json
+import unicodedata
 from pathlib import Path
 from supabase import create_client
 from dotenv import load_dotenv

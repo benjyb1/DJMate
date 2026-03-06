@@ -10,6 +10,27 @@ const supabase = createClient(
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2ZXJtb3RmeGFtdWJlamZub2plIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk2NTU4MTcsImV4cCI6MjA3NTIzMTgxN30.clXSFQ4QVhL8nUK_6shyhDVxhKaHUtnrdyqCnDeCCag"
 );
 
+// ── Supabase storage cover URL (mirrors create_safe_filename in upload scripts) ──
+const SUPABASE_COVERS_BASE = 'https://cvermotfxamubejfnoje.supabase.co/storage/v1/object/public/album-covers/';
+function makeSupabaseCoverUrl(artist, title) {
+  if (!artist || !title) return null;
+  let safe = `${artist}_${title}`.toLowerCase();
+  safe = safe.split('').map(c => /[a-z0-9\-_]/.test(c) ? c : '_').join('');
+  safe = safe.split('_').filter(Boolean).join('_').slice(0, 150);
+  return `${SUPABASE_COVERS_BASE}${safe}.jpg`;
+}
+
+// ── Parse semantic_tags (handles array, JSON string, or CSV) ──────────────
+function parseTags(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try { const p = JSON.parse(raw); return Array.isArray(p) ? p : [raw]; }
+    catch { return raw.split(',').map(s => s.trim()).filter(Boolean); }
+  }
+  return [];
+}
+
 // ── Generative canvas texture for tracks without album art ────────────────
 function makeGenerativeTexture(node) {
   const size = 128;
@@ -149,7 +170,8 @@ export default function App() {
   const fgRef      = useRef();
   const chatboxRef = useRef(null);
   const audioRef   = useRef(null);
-  const texCache   = useRef({});
+  const texCache     = useRef({});
+  const spriteMapRef = useRef({});
 
   const [trackData,     setTrackData]     = useState({ nodes: [], links: [] });
   const [allNodes,      setAllNodes]      = useState([]);
@@ -189,7 +211,9 @@ export default function App() {
             bpm:      t.bpm,
             key:      t.key,
             energy:   labels?.energy ?? null,
-            albumArt: t.album_art_url || null,
+            semanticTags: parseTags(labels?.semantic_tags),
+            vibe:     labels?.vibe ?? null,
+            albumArt: t.album_art_url || makeSupabaseCoverUrl(t.artist, t.title),
             audioUrl: t.audio_url || null,
             x: t.x_coord || (Math.random() - 0.5) * 1000,
             y: t.y_coord || (Math.random() - 0.5) * 1000,
@@ -259,16 +283,30 @@ export default function App() {
   // ── 3D node renderer ────────────────────────────────────────────────────
   const nodeThreeObject = useCallback((node) => {
     const isSelected = selectedTrack?.id === node.id;
+    const s = isSelected ? 44 : 30;
 
     let tex = texCache.current[node.id];
     if (!tex) {
       if (node.albumArt) {
-        tex = new THREE.TextureLoader().load(node.albumArt);
-        tex.anisotropy = 8;
+        // Show generative immediately; swap to real art when it loads
+        tex = makeGenerativeTexture(node);
+        texCache.current[node.id] = tex;
+
+        new THREE.TextureLoader().load(
+          node.albumArt,
+          (loaded) => {
+            loaded.anisotropy = 8;
+            texCache.current[node.id] = loaded;
+            const sp = spriteMapRef.current[node.id];
+            if (sp?.material) { sp.material.map = loaded; sp.material.needsUpdate = true; }
+          },
+          undefined,
+          () => { /* 404 — generative stays */ }
+        );
       } else {
         tex = makeGenerativeTexture(node);
+        texCache.current[node.id] = tex;
       }
-      texCache.current[node.id] = tex;
     }
 
     const mat = new THREE.SpriteMaterial({
@@ -276,8 +314,8 @@ export default function App() {
       opacity: isSelected ? 1.0 : 0.72,
     });
     const sprite = new THREE.Sprite(mat);
-    const s = isSelected ? 44 : 30;
     sprite.scale.set(s, s, 1);
+    spriteMapRef.current[node.id] = sprite;
     return sprite;
   }, [selectedTrack]);
 
@@ -638,9 +676,9 @@ export default function App() {
                   background: 'rgba(8,8,20,0.7)', border: '1px solid rgba(124,58,237,0.12)',
                   padding: '10px 12px',
                 }}>
-                  <div style={{ fontSize: 8, letterSpacing: '0.2em', color: '#475569', fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>INTENSITY</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: '#00d4ff', fontFamily: "'JetBrains Mono', monospace" }}>
-                    {selectedTrack.energy != null ? (parseFloat(selectedTrack.energy) * 10).toFixed(1) : '—'}
+                  <div style={{ fontSize: 8, letterSpacing: '0.2em', color: '#475569', fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>GENRE</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#00d4ff', fontFamily: "'JetBrains Mono', monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {selectedTrack.semanticTags?.[0] || '—'}
                   </div>
                 </div>
               </div>
@@ -669,7 +707,7 @@ export default function App() {
                   onMouseLeave={e => { e.currentTarget.style.background = isPlaying ? 'rgba(0,212,255,0.06)' : 'rgba(124,58,237,0.06)'; }}
                 >
                   {isPlaying ? <IconPause /> : <IconPlay />}
-                  {isPlaying ? 'PAUSE' : 'DEPLOY TO DECK'}
+                  {isPlaying ? 'PAUSE' : 'PLAY'}
                 </button>
               </div>
 

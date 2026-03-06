@@ -97,7 +97,8 @@ function AlbumArt({ title, artist, directUrl, size = 48 }) {
   const [err, setErr] = useState(false);
 
   useEffect(() => {
-    if (directUrl) { setUrl(directUrl); setErr(false); return; }
+    setErr(false); // Always reset error when track changes
+    if (directUrl) { setUrl(directUrl); return; }
     if (!title || !artist) return;
     // Try Supabase storage first
     const supabaseUrl = makeSupabaseCoverUrl(artist, title);
@@ -215,7 +216,7 @@ function TrackCard({ rank, track, score, source, onClick, onFindSimilar }) {
       </div>
 
       {/* Album art */}
-      <AlbumArt title={track.title} artist={track.artist} size={46} />
+      <AlbumArt title={track.title} artist={track.artist} directUrl={track.album_art_url || null} size={46} />
 
       {/* Main info */}
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -313,10 +314,10 @@ function TrackCard({ rank, track, score, source, onClick, onFindSimilar }) {
 
       {/* Audio */}
       <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
-        {track.trackid && !audioError ? (
+        {(track.audio_url || track.trackid) && !audioError ? (
           <audio
             controls
-            src={`${API_BASE}/tracks/${track.trackid}/audio`}
+            src={track.audio_url || `${API_BASE}/tracks/${track.trackid}/audio`}
             onError={() => setAudioError(true)}
             style={{ width: 120, height: 28, accentColor: '#7c3aed', opacity: 0.7 }}
           />
