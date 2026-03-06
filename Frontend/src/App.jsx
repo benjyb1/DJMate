@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import ForceGraph3D from 'react-force-graph-3d';
 import * as THREE from 'three';
 import DJChatbox from './components/DJChatbox';
+import LiveMode from './components/LiveMode';
 
 const supabase = createClient(
   "https://cvermotfxamubejfnoje.supabase.co",
@@ -142,7 +143,7 @@ const BTN_BASE = {
   transition: '150ms ease', borderRadius: 0,
 };
 
-const NAV_TABS = ['DISCOVERY', 'ARCHIVE', 'NETWORK'];
+const NAV_TABS = ['DISCOVERY', 'LIVE'];
 
 export default function App() {
   const fgRef      = useRef();
@@ -159,6 +160,7 @@ export default function App() {
   const [isPlaying,     setIsPlaying]     = useState(false);
   const [activeTab,     setActiveTab]     = useState('DISCOVERY');
   const [graphDims,     setGraphDims]     = useState({ w: window.innerWidth, h: window.innerHeight - 80 });
+  const [setList,       setSetList]       = useState([]); // persists between tab switches
 
   // ── Track container size for ForceGraph ────────────────────────────────
   useEffect(() => {
@@ -172,22 +174,28 @@ export default function App() {
     (async () => {
       try {
         setIsLoading(true);
-        const { data, error: err } = await supabase.from('tracks').select('*');
+        const { data, error: err } = await supabase
+          .from('tracks')
+          .select('trackid,title,artist,bpm,key,album_art_url,audio_url,x_coord,y_coord,z_coord,track_labels(energy,semantic_tags,vibe)');
         if (err) throw err;
         if (!data?.length) throw new Error('No tracks found in database');
 
-        const nodes = data.map(t => ({
-          id:       t.trackid,
-          name:     t.title  || 'Unknown',
-          artist:   t.artist || 'Unknown',
-          bpm:      t.bpm,
-          key:      t.key,
-          energy:   t.energy,
-          albumArt: t.album_art_url || null,
-          x: t.x_coord || (Math.random() - 0.5) * 1000,
-          y: t.y_coord || (Math.random() - 0.5) * 1000,
-          z: t.z_coord || (Math.random() - 0.5) * 1000,
-        }));
+        const nodes = data.map(t => {
+          const labels = Array.isArray(t.track_labels) ? t.track_labels[0] : t.track_labels;
+          return {
+            id:       t.trackid,
+            name:     t.title  || 'Unknown',
+            artist:   t.artist || 'Unknown',
+            bpm:      t.bpm,
+            key:      t.key,
+            energy:   labels?.energy ?? null,
+            albumArt: t.album_art_url || null,
+            audioUrl: t.audio_url || null,
+            x: t.x_coord || (Math.random() - 0.5) * 1000,
+            y: t.y_coord || (Math.random() - 0.5) * 1000,
+            z: t.z_coord || (Math.random() - 0.5) * 1000,
+          };
+        });
 
         const artistMap = {};
         data.forEach(t => {
@@ -235,7 +243,10 @@ export default function App() {
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
-      audioRef.current.src = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/tracks/${selectedTrack.id}/audio`;
+      // Prefer Supabase-hosted audio; fall back to backend endpoint
+      const src = selectedTrack.audioUrl
+        || `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/tracks/${selectedTrack.id}/audio`;
+      audioRef.current.src = src;
       audioRef.current.play().catch(() => setIsPlaying(false));
       setIsPlaying(true);
     }
@@ -424,17 +435,25 @@ export default function App() {
                 onClick={() => setActiveTab(tab)}
                 style={{
                   background: 'none', border: 'none', cursor: 'pointer',
-                  padding: '6px 16px',
+                  padding: '6px 16px', position: 'relative',
                   fontSize: 11, fontWeight: 600, letterSpacing: '0.12em',
                   fontFamily: "'Inter', system-ui, sans-serif",
                   color: activeTab === tab ? '#00d4ff' : '#475569',
                   borderBottom: activeTab === tab ? '2px solid #00d4ff' : '2px solid transparent',
                   transition: '150ms ease',
+                  display: 'flex', alignItems: 'center', gap: 6,
                 }}
                 onMouseEnter={e => { if (activeTab !== tab) e.currentTarget.style.color = '#94a3b8'; }}
                 onMouseLeave={e => { if (activeTab !== tab) e.currentTarget.style.color = '#475569'; }}
               >
                 {tab}
+                {tab === 'LIVE' && setList.length > 0 && (
+                  <div style={{
+                    width: 6, height: 6, background: '#ef4444',
+                    boxShadow: '0 0 6px #ef4444',
+                    animation: 'blink 1.5s ease-in-out infinite',
+                  }} />
+                )}
               </button>
             ))}
           </div>
@@ -492,6 +511,18 @@ export default function App() {
 
       {/* ═══════════ MAIN CONTENT ═══════════ */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+
+        {/* ── LIVE TAB ── */}
+        {activeTab === 'LIVE' && (
+          <LiveMode
+            setList={setList}
+            setSetList={setSetList}
+            allNodes={allNodes}
+          />
+        )}
+
+        {/* ── DISCOVERY TAB ── */}
+        {activeTab === 'DISCOVERY' && <>
 
         {/* Grid overlay */}
         <div style={{
@@ -653,13 +684,22 @@ export default function App() {
                   <IconSearch /> FIND SIMILAR
                 </button>
                 <button
-                  onClick={() => {}}
-                  aria-label="Analyze stems"
-                  style={{ ...BTN_BASE, flex: 1, border: '1px solid rgba(124,58,237,0.3)', color: '#a855f7' }}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(124,58,237,0.06)'; }}
+                  onClick={() => {
+                    setSetList(prev => {
+                      const id = String(selectedTrack.id);
+                      if (prev.some(t => String(t.id) === id)) return prev;
+                      return [...prev, selectedTrack];
+                    });
+                    setActiveTab('LIVE');
+                  }}
+                  aria-label="Add to live set"
+                  style={{ ...BTN_BASE, flex: 1, border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(239,68,68,0.06)'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                 >
-                  <IconAnalyze /> ANALYZE
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+                    <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                  </svg> ADD TO SET
                 </button>
               </div>
             </div>
@@ -672,6 +712,7 @@ export default function App() {
           trackCount={allNodes.length}
           onTrackSelect={handleChatTrackSelect}
         />
+        </>}
       </div>
 
       {/* ═══════════ BOTTOM STATUS BAR ═══════════ */}

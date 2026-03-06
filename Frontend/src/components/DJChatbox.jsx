@@ -81,25 +81,50 @@ function SimBar({ score }) {
   );
 }
 
-// ── Album art with iTunes fallback ─────────────────────────────────────────
-function AlbumArt({ title, artist, size = 48 }) {
-  const [url, setUrl] = useState(null);
+// ── Supabase storage safe filename (mirrors upload_album_covers.py) ────────
+const SUPABASE_COVERS_BASE = 'https://cvermotfxamubejfnoje.supabase.co/storage/v1/object/public/album-covers/';
+function makeSupabaseCoverUrl(artist, title) {
+  if (!artist || !title) return null;
+  let safe = `${artist}_${title}`.toLowerCase();
+  safe = safe.split('').map(c => /[a-z0-9\-_]/.test(c) ? c : '_').join('');
+  safe = safe.split('_').filter(Boolean).join('_').slice(0, 150);
+  return `${SUPABASE_COVERS_BASE}${safe}.jpg`;
+}
+
+// ── Album art: Supabase storage → iTunes → generative fallback ─────────────
+function AlbumArt({ title, artist, directUrl, size = 48 }) {
+  const [url, setUrl] = useState(directUrl || null);
   const [err, setErr] = useState(false);
 
   useEffect(() => {
+    if (directUrl) { setUrl(directUrl); setErr(false); return; }
     if (!title || !artist) return;
-    let cancelled = false;
-    const term = encodeURIComponent(`${artist} ${title}`);
-    fetch(`https://itunes.apple.com/search?term=${term}&entity=song&limit=1`)
-      .then(r => r.json())
-      .then(data => {
-        if (cancelled) return;
-        const raw = data.results?.[0]?.artworkUrl100;
-        if (raw) setUrl(raw.replace('100x100bb', '300x300bb'));
-      })
-      .catch(() => !cancelled && setErr(true));
-    return () => { cancelled = true; };
-  }, [title, artist]);
+    // Try Supabase storage first
+    const supabaseUrl = makeSupabaseCoverUrl(artist, title);
+    if (supabaseUrl) { setUrl(supabaseUrl); return; }
+  }, [directUrl, title, artist]);
+
+  const handleImgError = () => {
+    // Supabase 404 → fall through to iTunes
+    if (url && url.includes('supabase')) {
+      let cancelled = false;
+      const term = encodeURIComponent(`${artist} ${title}`);
+      fetch(`https://itunes.apple.com/search?term=${term}&entity=song&limit=1`)
+        .then(r => r.json())
+        .then(data => {
+          if (cancelled) return;
+          const raw = data.results?.[0]?.artworkUrl100;
+          if (raw) setUrl(raw.replace('100x100bb', '300x300bb'));
+          else setErr(true);
+        })
+        .catch(() => { if (!cancelled) setErr(true); });
+      return () => { cancelled = true; };
+    }
+    setErr(true);
+  };
+
+  // Old iTunes-only effect removed — now we chain via onError
+  useEffect(() => {}, [title, artist]);
 
   if (url && !err) {
     return (
@@ -108,7 +133,7 @@ function AlbumArt({ title, artist, size = 48 }) {
         alt={`${title} artwork`}
         width={size}
         height={size}
-        onError={() => setErr(true)}
+        onError={handleImgError}
         style={{ width: size, height: size, objectFit: 'cover', display: 'block', flexShrink: 0 }}
       />
     );
