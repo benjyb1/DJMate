@@ -791,15 +791,13 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
     // Update best BPM display from top match metadata
     if (top5[0]?.bpm) setDetectedBPM(Math.round(top5[0].bpm));
 
-    // ── 5. Auto-add logic: super-strict thresholds ──────────────────────────
+    // ── 5. Auto-add logic ────────────────────────────────────────────────────
     //   • Confidence must be ≥ 0.90
-    //   • Same track must be #1 for 5 consecutive 15-second windows (75 s min)
-    //   • 3-minute lockout after any identification
+    //   • Same track must be #1 for 3 consecutive 15-second windows (45 s min)
     //   • Never re-add the track that was just identified
     const now = Date.now();
-    const inLockout = now < lockoutUntilRef.current;
 
-    if (!inLockout && top5.length > 0) {
+    if (top5.length > 0) {
       const best  = top5[0];
       const topId = String(best.id);
       // Margin check — top score must be clearly ahead of #2
@@ -808,12 +806,11 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
       if (best._matchScore >= 0.90 && margin >= 0.02 && topId !== String(lastAddedIdRef.current)) {
         if (topId === consecutiveRef.current.id) {
           consecutiveRef.current.count++;
-          if (consecutiveRef.current.count >= 5) {
-            // Confirmed! Add to set and start lockout
+          if (consecutiveRef.current.count >= 3) {
+            // Confirmed! Add to set
             addTrack(best);
             setMatchedTrack(best);
             lastAddedIdRef.current  = best.id;
-            lockoutUntilRef.current = now + 3 * 60 * 1000;  // 3-minute lockout
             consecutiveRef.current  = { id: null, count: 0 };
             setTimeout(() => setMatchedTrack(null), 4000);
           }
@@ -972,7 +969,7 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
                   </span>
                   {consecutiveRef.current.count > 0 && (
                     <span style={{ fontSize: 8, color: '#a855f7', fontFamily: "'JetBrains Mono', monospace" }}>
-                      {consecutiveRef.current.count}/5
+                      {consecutiveRef.current.count}/3
                     </span>
                   )}
                 </>
