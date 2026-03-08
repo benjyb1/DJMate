@@ -29,6 +29,7 @@
     "axios": "^1.13.5",
     "chroma-js": "^2.6.0",
     "date-fns": "^2.30.0",
+    "framer-motion": "^12.35.1",
     "konva": "^9.3.22",
     "leva": "^0.9.36",
     "lodash-es": "^4.17.23",
