@@ -1,9 +1,9 @@
 import React, { useEffect, useRef } from 'react';
 
 /**
- * Full-screen WebGL shader background — animated purple-blue plasma waves.
- * Adapted from 21st.dev community component by Le Thanh (@thanh).
- * Renders behind all content with pointer-events: none.
+ * Full-screen WebGL shader background — cosmic nebula with drifting gas clouds
+ * and faint twinkling stars. Slow organic movement that complements the 3D
+ * point-cloud galaxy without competing with it.
  */
 export default function ShaderBackground() {
   const canvasRef = useRef(null);
@@ -20,79 +20,106 @@ export default function ShaderBackground() {
     uniform vec2 iResolution;
     uniform float iTime;
 
-    const float overallSpeed = 0.2;
-    const float gridSmoothWidth = 0.015;
-    const float axisWidth = 0.05;
-    const float majorLineWidth = 0.025;
-    const float minorLineWidth = 0.0125;
-    const float majorLineFrequency = 5.0;
-    const float minorLineFrequency = 1.0;
-    const float scale = 5.0;
-    const vec4 lineColor = vec4(0.4, 0.2, 0.8, 1.0);
-    const float minLineWidth = 0.01;
-    const float maxLineWidth = 0.2;
-    const float lineSpeed = 1.0 * overallSpeed;
-    const float lineAmplitude = 1.0;
-    const float lineFrequency = 0.2;
-    const float warpSpeed = 0.2 * overallSpeed;
-    const float warpFrequency = 0.5;
-    const float warpAmplitude = 1.0;
-    const float offsetFrequency = 0.5;
-    const float offsetSpeed = 1.33 * overallSpeed;
-    const float minOffsetSpread = 0.6;
-    const float maxOffsetSpread = 2.0;
-    const int linesPerGroup = 16;
-
-    #define drawSmoothLine(pos, halfWidth, t) smoothstep(halfWidth, 0.0, abs(pos - (t)))
-    #define drawCrispLine(pos, halfWidth, t) smoothstep(halfWidth + gridSmoothWidth, halfWidth, abs(pos - (t)))
-    #define drawCircle(pos, radius, coord) smoothstep(radius + gridSmoothWidth, radius, length(coord - (pos)))
-
-    float random(float t) {
-      return (cos(t) + cos(t * 1.3 + 1.3) + cos(t * 1.4 + 1.4)) / 3.0;
+    /* ── noise primitives ── */
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
     }
 
-    float getPlasmaY(float x, float horizontalFade, float offset) {
-      return random(x * lineFrequency + iTime * lineSpeed) * horizontalFade * lineAmplitude + offset;
+    float hash21(vec2 p) {
+      p = fract(p * vec2(234.34, 435.345));
+      p += dot(p, p + 34.23);
+      return fract(p.x * p.y);
     }
 
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      float a = hash(i);
+      float b = hash(i + vec2(1.0, 0.0));
+      float c = hash(i + vec2(0.0, 1.0));
+      float d = hash(i + vec2(1.0, 1.0));
+      return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    }
+
+    /* fractal brownian motion — 5 octaves with rotation per octave */
+    float fbm(vec2 p) {
+      float v = 0.0;
+      float a = 0.5;
+      vec2 shift = vec2(100.0);
+      mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
+      for (int i = 0; i < 5; i++) {
+        v += a * noise(p);
+        p = rot * p * 2.0 + shift;
+        a *= 0.5;
+      }
+      return v;
+    }
+
+    /* ── main ── */
     void main() {
       vec2 uv = gl_FragCoord.xy / iResolution.xy;
-      vec2 space = (gl_FragCoord.xy - iResolution.xy / 2.0) / iResolution.x * 2.0 * scale;
+      float aspect = iResolution.x / iResolution.y;
+      vec2 st = vec2(uv.x * aspect, uv.y) * 2.5;
 
-      float horizontalFade = 1.0 - (cos(uv.x * 6.28) * 0.5 + 0.5);
-      float verticalFade = 1.0 - (cos(uv.y * 6.28) * 0.5 + 0.5);
+      float t = iTime * 0.04;
 
-      space.y += random(space.x * warpFrequency + iTime * warpSpeed) * warpAmplitude * (0.5 + horizontalFade);
-      space.x += random(space.y * warpFrequency + iTime * warpSpeed + 2.0) * warpAmplitude * horizontalFade;
+      /* domain-warped FBM for organic nebula shapes */
+      float n1 = fbm(st + vec2(t * 0.3, t * 0.15));
+      float n2 = fbm(st + vec2(5.2 + t * 0.2, 1.3 - t * 0.1));
+      float n3 = fbm(st + vec2(n1, n2) * 1.8 + t * 0.1);
 
-      vec4 lines = vec4(0.0);
-      vec4 bgColor1 = vec4(0.02, 0.02, 0.04, 1.0);
-      vec4 bgColor2 = vec4(0.12, 0.04, 0.2, 1.0);
+      /* second warp layer for depth */
+      float n4 = fbm(st * 1.5 + vec2(n3 * 0.8, n1 * 0.6) + vec2(-t * 0.15, t * 0.08));
 
-      for(int l = 0; l < linesPerGroup; l++) {
-        float normalizedLineIndex = float(l) / float(linesPerGroup);
-        float offsetTime = iTime * offsetSpeed;
-        float offsetPosition = float(l) + space.x * offsetFrequency;
-        float rand = random(offsetPosition + offsetTime) * 0.5 + 0.5;
-        float halfWidth = mix(minLineWidth, maxLineWidth, rand * horizontalFade) / 2.0;
-        float offset = random(offsetPosition + offsetTime * (1.0 + normalizedLineIndex)) * mix(minOffsetSpread, maxOffsetSpread, horizontalFade);
-        float linePosition = getPlasmaY(space.x, horizontalFade, offset);
-        float line = drawSmoothLine(linePosition, halfWidth, space.y) / 2.0 + drawCrispLine(linePosition, halfWidth * 0.15, space.y);
+      /* base: very dark space */
+      vec3 color = vec3(0.012, 0.012, 0.025);
 
-        float circleX = mod(float(l) + iTime * lineSpeed, 25.0) - 12.0;
-        vec2 circlePosition = vec2(circleX, getPlasmaY(circleX, horizontalFade, offset));
-        float circle = drawCircle(circlePosition, 0.01, space) * 4.0;
+      /* nebula cloud layers — purples and deep blues */
+      vec3 purpleDeep  = vec3(0.10, 0.02, 0.20);
+      vec3 purpleMid   = vec3(0.18, 0.06, 0.35);
+      vec3 blueDeep    = vec3(0.02, 0.06, 0.18);
+      vec3 cyanHint    = vec3(0.02, 0.12, 0.20);
 
-        line = line + circle;
-        lines += line * lineColor * rand;
-      }
+      /* blend nebula colors using noise layers */
+      float cloud = smoothstep(0.3, 0.75, n3);
+      float wisps = smoothstep(0.4, 0.8, n4) * 0.6;
+      float glow  = smoothstep(0.5, 0.9, n3 * n4) * 0.4;
 
-      vec4 fragColor = mix(bgColor1, bgColor2, uv.x);
-      fragColor *= verticalFade;
-      fragColor.a = 1.0;
-      fragColor += lines;
+      color += purpleDeep * cloud * 0.8;
+      color += blueDeep * wisps;
+      color += purpleMid * glow;
+      color += cyanHint * smoothstep(0.55, 0.85, n2) * 0.2;
 
-      gl_FragColor = fragColor;
+      /* soft vignette — darker at edges, subtle focus center */
+      vec2 vigUv = uv - 0.5;
+      float vig = 1.0 - dot(vigUv, vigUv) * 1.6;
+      vig = smoothstep(0.0, 1.0, vig);
+      color *= 0.5 + vig * 0.5;
+
+      /* ── star field ── */
+      /* layer 1: faint background stars */
+      vec2 starGrid1 = floor(gl_FragCoord.xy * 0.4);
+      float starVal1 = hash21(starGrid1);
+      float star1 = step(0.993, starVal1);
+      float twinkle1 = sin(iTime * (1.0 + starVal1 * 2.0) + starVal1 * 6.28) * 0.4 + 0.6;
+      float starBright1 = star1 * twinkle1 * (0.15 + starVal1 * 0.15);
+
+      /* layer 2: sparse brighter stars */
+      vec2 starGrid2 = floor(gl_FragCoord.xy * 0.15);
+      float starVal2 = hash21(starGrid2 + 73.1);
+      float star2 = step(0.997, starVal2);
+      float twinkle2 = sin(iTime * 0.8 + starVal2 * 6.28) * 0.3 + 0.7;
+      float starBright2 = star2 * twinkle2 * (0.3 + starVal2 * 0.2);
+
+      /* star colors — mostly white with subtle purple/blue tints */
+      vec3 starColor1 = mix(vec3(0.7, 0.7, 0.85), vec3(0.6, 0.5, 0.9), starVal1);
+      vec3 starColor2 = mix(vec3(0.85, 0.85, 1.0), vec3(0.7, 0.65, 1.0), starVal2);
+
+      color += starColor1 * starBright1;
+      color += starColor2 * starBright2;
+
+      gl_FragColor = vec4(color, 1.0);
     }
   `;
 
@@ -103,7 +130,6 @@ export default function ShaderBackground() {
     const gl = canvas.getContext('webgl');
     if (!gl) return;
 
-    // Compile shaders
     const compileShader = (type, source) => {
       const shader = gl.createShader(type);
       gl.shaderSource(shader, source);
@@ -130,7 +156,6 @@ export default function ShaderBackground() {
       return;
     }
 
-    // Fullscreen quad
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
@@ -181,7 +206,7 @@ export default function ShaderBackground() {
         height: '100%',
         zIndex: 0,
         pointerEvents: 'none',
-        opacity: 0.55,
+        opacity: 0.6,
       }}
     />
   );
