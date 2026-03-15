@@ -1170,6 +1170,131 @@ class DatabaseManager:
             logger.warning(f"delete_playlist failed: {e}")
             return False
 
+    async def rename_playlist(self, playlist_id: str, new_name: str) -> bool:
+        """Update the name of a playlist."""
+        if not self.client:
+            return False
+        try:
+            self.client.table("playlists") \
+                .update({"name": new_name}) \
+                .eq("id", playlist_id) \
+                .execute()
+            return True
+        except Exception as e:
+            logger.warning(f"rename_playlist failed (table may not exist): {e}")
+            return False
+
+    async def get_playlist_tree(self) -> List[Dict[str, Any]]:
+        """Fetch all playlists ordered by created_at with track counts."""
+        if not self.client:
+            return []
+        try:
+            response = self.client.table("playlists") \
+                .select("*") \
+                .order("created_at") \
+                .execute()
+
+            playlists = []
+            for row in response.data or []:
+                # Get track count
+                count = 0
+                try:
+                    count_resp = self.client.table("playlist_tracks") \
+                        .select("id", count="exact") \
+                        .eq("playlist_id", row["id"]) \
+                        .execute()
+                    count = count_resp.count if hasattr(count_resp, "count") and count_resp.count else 0
+                except Exception:
+                    pass
+
+                playlists.append({
+                    "id": row["id"],
+                    "name": row.get("name", ""),
+                    "parent_id": row.get("parent_id"),
+                    "description": row.get("description"),
+                    "track_count": count,
+                    "created_at": row.get("created_at"),
+                })
+            return playlists
+        except Exception as e:
+            logger.warning(f"get_playlist_tree failed (table may not exist): {e}")
+            return []
+
+    async def get_track_pool(self) -> List[Dict[str, Any]]:
+        """Fetch all tracks joined with labels. Lightweight — no embeddings or UMAP coords."""
+        if not self.client:
+            return []
+        try:
+            response = self.client.table("tracks") \
+                .select("trackid, title, artist, bpm, key, filepath, track_labels(energy, semantic_tags, vibe)") \
+                .execute()
+
+            tracks = []
+            for row in response.data or []:
+                labels = row.get("track_labels", {}) or {}
+                tracks.append({
+                    "trackid": row["trackid"],
+                    "title": row.get("title", ""),
+                    "artist": row.get("artist", ""),
+                    "bpm": row.get("bpm"),
+                    "key": row.get("key"),
+                    "filepath": row.get("filepath", ""),
+                    "energy": labels.get("energy"),
+                    "semantic_tags": labels.get("semantic_tags") or [],
+                    "vibe": labels.get("vibe") or [],
+                })
+            return tracks
+        except Exception as e:
+            logger.warning(f"get_track_pool failed (table may not exist): {e}")
+            return []
+
+    async def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]) -> bool:
+        """Append tracks to a playlist starting after the current max position."""
+        if not self.client:
+            return False
+        try:
+            # Get current max position
+            max_pos = -1
+            try:
+                pos_resp = self.client.table("playlist_tracks") \
+                    .select("position") \
+                    .eq("playlist_id", playlist_id) \
+                    .order("position", desc=True) \
+                    .limit(1) \
+                    .execute()
+                if pos_resp.data:
+                    max_pos = pos_resp.data[0]["position"]
+            except Exception:
+                pass
+
+            # Insert new tracks starting at max_position + 1
+            for i, tid in enumerate(track_ids):
+                self.client.table("playlist_tracks").insert({
+                    "playlist_id": playlist_id,
+                    "trackid": tid,
+                    "position": max_pos + 1 + i,
+                }).execute()
+            return True
+        except Exception as e:
+            logger.warning(f"add_tracks_to_playlist failed (table may not exist): {e}")
+            return False
+
+    async def remove_tracks_from_playlist(self, playlist_id: str, track_ids: List[str]) -> bool:
+        """Remove specific tracks from a playlist."""
+        if not self.client:
+            return False
+        try:
+            for tid in track_ids:
+                self.client.table("playlist_tracks") \
+                    .delete() \
+                    .eq("playlist_id", playlist_id) \
+                    .eq("trackid", tid) \
+                    .execute()
+            return True
+        except Exception as e:
+            logger.warning(f"remove_tracks_from_playlist failed (table may not exist): {e}")
+            return False
+
     async def close(self):
         """Clean up connections."""
         if self.pg_pool:
