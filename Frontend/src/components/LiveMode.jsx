@@ -3,6 +3,8 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { m, AnimatePresence } from 'framer-motion';
 import { apiClient } from '../api/apiClient';
 import GlassPanel from './ui/GlassPanel';
+import TagEditor from './TagEditor';
+import CrateBuilder from './CrateBuilder';
 import { makeSupabaseCoverUrl } from '../utils/coverUrl';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -13,26 +15,82 @@ function getAudioSrc(track) {
     || `${API_BASE}/tracks/${track.id || track.trackid}/audio`;
 }
 
-// ── Trajectory calculation ─────────────────────────────────────────────────
+// ── 7D Trajectory calculation ──────────────────────────────────────────────
+function normBpm(bpm) { return Math.max(0, Math.min(1, ((bpm || 130) - 60) / 140)); }
+
+function camelotToNum(key) {
+  const parsed = parseCamelot(key);
+  if (!parsed) return 0.5;
+  return ((parsed.num - 1) / 11) + (parsed.letter === 'B' ? 0.5 / 12 : 0);
+}
+
+function vibeHash(tags) {
+  if (!Array.isArray(tags) || tags.length === 0) return 0.5;
+  const sum = tags.join('').split('').reduce((s, c) => s + c.charCodeAt(0), 0);
+  return (sum % 100) / 100;
+}
+
+function trackTo7D(track) {
+  return {
+    x: track.x || 0,
+    y: track.y || 0,
+    z: track.z || 0,
+    bpm_norm: normBpm(track.bpm),
+    energy: parseFloat(track.energy ?? 0.5),
+    key_num: camelotToNum(track.key),
+    vibe_hash: vibeHash(track.semanticTags || track.semantic_tags),
+  };
+}
+
 function getTrajectoryVector(setList) {
   if (setList.length < 2) return null;
   const recent = setList.slice(-Math.min(4, setList.length));
+  const dims = ['x', 'y', 'z', 'bpm_norm', 'energy', 'key_num', 'vibe_hash'];
   const vectors = [];
   for (let i = 1; i < recent.length; i++) {
-    vectors.push({
-      x: (recent[i].x || 0) - (recent[i - 1].x || 0),
-      y: (recent[i].y || 0) - (recent[i - 1].y || 0),
-      z: (recent[i].z || 0) - (recent[i - 1].z || 0),
-    });
+    const a = trackTo7D(recent[i - 1]);
+    const b = trackTo7D(recent[i]);
+    const delta = {};
+    dims.forEach(d => { delta[d] = b[d] - a[d]; });
+    vectors.push(delta);
   }
-  const avg = vectors.reduce((acc, v) => ({
-    x: acc.x + v.x / vectors.length,
-    y: acc.y + v.y / vectors.length,
-    z: acc.z + v.z / vectors.length,
-  }), { x: 0, y: 0, z: 0 });
-  const mag = Math.sqrt(avg.x ** 2 + avg.y ** 2 + avg.z ** 2);
+  const avg = {};
+  dims.forEach(d => {
+    avg[d] = vectors.reduce((s, v) => s + v[d], 0) / vectors.length;
+  });
+  const mag = Math.sqrt(dims.reduce((s, d) => s + avg[d] ** 2, 0));
   if (mag < 0.001) return null;
-  return { x: avg.x / mag, y: avg.y / mag, z: avg.z / mag };
+  const norm = {};
+  dims.forEach(d => { norm[d] = avg[d] / mag; });
+  norm._raw = avg;
+  return norm;
+}
+
+function getSetDirectionSummary(setList) {
+  if (setList.length < 2) return null;
+  const recent = setList.slice(-Math.min(4, setList.length));
+  const deltas = { energy: 0, bpm_norm: 0, key_num: 0, vibe_hash: 0 };
+  const dims = Object.keys(deltas);
+  for (let i = 1; i < recent.length; i++) {
+    const a = trackTo7D(recent[i - 1]);
+    const b = trackTo7D(recent[i]);
+    dims.forEach(d => { deltas[d] += b[d] - a[d]; });
+  }
+  const n = recent.length - 1;
+  dims.forEach(d => { deltas[d] /= n; });
+
+  const parts = [];
+  if (deltas.energy > 0.05) parts.push('Building energy');
+  else if (deltas.energy < -0.05) parts.push('Dropping down');
+  else parts.push('Maintaining groove');
+
+  if (Math.abs(deltas.bpm_norm) > 0.03) {
+    parts.push(deltas.bpm_norm > 0 ? 'Tempo rising' : 'Tempo falling');
+  }
+  if (Math.abs(deltas.vibe_hash) > 0.08) parts.push('Shifting genre');
+  if (Math.abs(deltas.key_num) > 0.05) parts.push('Key drifting');
+
+  return parts.join(' / ');
 }
 
 function suggestDirectional(anchor, setList, allNodes) {
@@ -49,19 +107,59 @@ function suggestDirectional(anchor, setList, allNodes) {
   }
 
   const dir = setList.length >= 2 ? getTrajectoryVector(setList) : null;
+  const anchorVec = trackTo7D(anchor);
+
+  // Compute energy delta trend from recent tracks
+  let energyDelta = 0;
+  if (setList.length >= 2) {
+    const tail = setList.slice(-Math.min(4, setList.length));
+    for (let i = 1; i < tail.length; i++) {
+      energyDelta += parseFloat(tail[i].energy ?? 0.5) - parseFloat(tail[i - 1].energy ?? 0.5);
+    }
+    energyDelta /= (tail.length - 1);
+  }
 
   const scored = candidates.map(n => {
-    const dx = (n.x || 0) - (anchor.x || 0);
-    const dy = (n.y || 0) - (anchor.y || 0);
-    const dz = (n.z || 0) - (anchor.z || 0);
+    const nVec = trackTo7D(n);
+
+    // Spatial score (15%) — proximity in x/y/z
+    const dx = nVec.x - anchorVec.x;
+    const dy = nVec.y - anchorVec.y;
+    const dz = nVec.z - anchorVec.z;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
     const dot  = dir ? (dx * dir.x + dy * dir.y + dz * dir.z) / dist : 0;
     const dirScore  = dir ? (dot + 1) / 2 : 0.5;
     const proxScore = 1 / (1 + dist * 0.0008);
-    const bpmDiff   = Math.abs((n.bpm || 130) - (anchor.bpm || 130));
-    const bpmScore  = Math.max(0, 1 - bpmDiff / 15);
-    const keyScore  = keyCompatibility(n.key, anchor.key);
-    const _score    = dirScore * 0.3 + proxScore * 0.15 + bpmScore * 0.25 + keyScore * 0.3;
+    const spatialScore = dirScore * 0.6 + proxScore * 0.4;
+
+    // BPM score (20%) — penalize >8 BPM difference hard
+    const bpmDiff = Math.abs((n.bpm || 130) - (anchor.bpm || 130));
+    const bpmScore = bpmDiff <= 8 ? 1 - (bpmDiff / 8) * 0.3 : Math.max(0, 1 - bpmDiff / 15);
+
+    // Energy score (25%) — reward continuing the energy delta trend
+    const nEnergy = parseFloat(n.energy ?? 0.5);
+    const aEnergy = parseFloat(anchor.energy ?? 0.5);
+    const candidateDelta = nEnergy - aEnergy;
+    const trendAlignment = energyDelta !== 0
+      ? (Math.sign(candidateDelta) === Math.sign(energyDelta) ? 0.3 : -0.1)
+      : 0;
+    const energyProximity = 1 - Math.min(1, Math.abs(candidateDelta) / 0.5);
+    const energyScore = Math.max(0, Math.min(1, energyProximity + trendAlignment));
+
+    // Key score (20%) — Camelot compatibility
+    const keyScore = keyCompatibility(n.key, anchor.key);
+
+    // Vibe score (20%) — semantic_tags overlap
+    const anchorTags = Array.isArray(anchor.semanticTags) ? anchor.semanticTags : [];
+    const nTags = Array.isArray(n.semanticTags) ? n.semanticTags : [];
+    let vibeScore = 0.5;
+    if (anchorTags.length > 0 && nTags.length > 0) {
+      const aSet = new Set(anchorTags.map(t => t.toLowerCase()));
+      const overlap = nTags.filter(t => aSet.has(t.toLowerCase())).length;
+      vibeScore = overlap / Math.max(anchorTags.length, nTags.length);
+    }
+
+    const _score = spatialScore * 0.15 + bpmScore * 0.20 + energyScore * 0.25 + keyScore * 0.20 + vibeScore * 0.20;
     return { ...n, _score, _dist: dist, _dot: dot };
   });
 
@@ -424,7 +522,13 @@ function SetTrackArt({ track, index, isLatest, isPlaying, isAnchor, onRemove, on
 }
 
 // ── Suggestion / search result row ─────────────────────────────────────────
-const TrackRow = React.memo(function TrackRow({ track, isPlaying, isAnchor, onAdd, onPlay, onFindSimilar, onSelectAnchor, isStarter = false, index = 0 }) {
+const IconEdit = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+  </svg>
+);
+
+const TrackRow = React.memo(function TrackRow({ track, isPlaying, isAnchor, onAdd, onPlay, onFindSimilar, onEdit, onSelectAnchor, isStarter = false, index = 0 }) {
   const name = track.name || track.title || 'Unknown';
   return (
     <m.div
@@ -500,6 +604,24 @@ const TrackRow = React.memo(function TrackRow({ track, isPlaying, isAnchor, onAd
 
       {/* Buttons */}
       <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+        {onEdit && (
+          <m.button
+            onClick={() => onEdit(track)}
+            aria-label={`Edit tags for ${name}`}
+            title="Edit tags"
+            whileHover={{ scale: 1.1, background: 'rgba(124,58,237,0.15)', color: '#c084fc' }}
+            whileTap={{ scale: 0.9 }}
+            style={{
+              width: 28, height: 28, borderRadius: 'var(--radius-sm)',
+              background: 'rgba(124,58,237,0.04)',
+              border: '1px solid rgba(124,58,237,0.18)',
+              color: 'rgba(168,85,247,0.5)',
+              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <IconEdit />
+          </m.button>
+        )}
         <m.button
           onClick={() => onFindSimilar(track)}
           aria-label={`Find similar to ${name}`}
@@ -587,7 +709,7 @@ function MicLevel({ analyser, active }) {
           <div key={i} style={{
             width: 3, height: 6 + i * 1.2,
             borderRadius: 'var(--radius-xs)',
-            background: lit ? (i > 9 ? '#ef4444' : i > 7 ? '#f59e0b' : '#00d4ff') : 'rgba(255,255,255,0.08)',
+            background: lit ? (i > 9 ? '#a855f7' : i > 7 ? '#7c3aed' : '#00d4ff') : 'rgba(255,255,255,0.08)',
             transition: '80ms ease',
           }} />
         );
@@ -609,6 +731,10 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
   const [searchError, setSearchError]     = useState('');
   const [playingId, setPlayingId]         = useState(null);
   const [anchorTrack, setAnchorTrack]     = useState(null);
+  const [editingTrack, setEditingTrack]   = useState(null);
+  const [availableTags, setAvailableTags] = useState([]);
+  const [availableVibes, setAvailableVibes] = useState([]);
+  const [liveSubMode, setLiveSubMode]     = useState('tracker');
 
   const micStreamRef     = useRef(null);
   const audioCtxRef      = useRef(null);
@@ -646,6 +772,14 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
     if (setListRef.current) setListRef.current.scrollLeft = setListRef.current.scrollWidth;
   }, [setList.length]);
 
+  // Fetch available tags for tag editor autocomplete
+  useEffect(() => {
+    apiClient.get('/tags/available').then(data => {
+      setAvailableTags(data.semantic_tags || []);
+      setAvailableVibes(data.vibes || []);
+    }).catch(() => {});
+  }, []);
+
   const effectiveAnchor = anchorTrack ?? (setList.length > 0 ? setList[setList.length - 1] : null);
   const showStarters = setList.length === 0 && !anchorTrack;
 
@@ -655,6 +789,12 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
     () => suggestDirectional(effectiveAnchor, setList, allNodes),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [anchorId, setListKey, allNodes.length],
+  );
+
+  const directionSummary = useMemo(
+    () => getSetDirectionSummary(setList),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [setListKey],
   );
 
   const selectAnchor = useCallback((track) => {
@@ -885,7 +1025,38 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
             <div style={{ fontSize: 8, letterSpacing: '0.3em', color: 'rgba(124,58,237,0.6)', fontFamily: "'JetBrains Mono', monospace", marginBottom: 3 }}>
               LIVE SESSION
             </div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>SET TRACKER</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>
+              {liveSubMode === 'tracker' ? 'SET TRACKER' : 'CRATE BUILDER'}
+            </div>
+          </div>
+
+          {/* Mode toggle pill */}
+          <div style={{
+            display: 'flex', background: 'rgba(8,8,20,0.6)',
+            borderRadius: 'var(--radius-pill)', padding: 2,
+            border: '1px solid var(--glass-border)',
+          }}>
+            {['tracker', 'builder'].map(mode => (
+              <m.button
+                key={mode}
+                onClick={() => setLiveSubMode(mode)}
+                whileTap={{ scale: 0.95 }}
+                style={{
+                  padding: '4px 14px', fontSize: 9, fontWeight: 600,
+                  fontFamily: "'JetBrains Mono', monospace",
+                  letterSpacing: '0.08em', cursor: 'pointer',
+                  borderRadius: 'var(--radius-pill)',
+                  border: 'none',
+                  background: liveSubMode === mode
+                    ? 'linear-gradient(135deg, rgba(124,58,237,0.3), rgba(0,212,255,0.15))'
+                    : 'transparent',
+                  color: liveSubMode === mode ? '#e2e8f0' : '#475569',
+                  transition: 'all 200ms ease',
+                }}
+              >
+                {mode === 'tracker' ? 'TRACKER' : 'CRATES'}
+              </m.button>
+            ))}
           </div>
 
           {setList.length > 0 && (
@@ -979,6 +1150,10 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
         </div>
       </GlassPanel>
 
+      {liveSubMode === 'builder' ? (
+        <CrateBuilder />
+      ) : (
+      <>
       {/* ── Set list ──────────────────────────────────────────────────────── */}
       <div style={{
         borderBottom: '1px solid rgba(124,58,237,0.1)',
@@ -1069,7 +1244,7 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
                 </div>
                 {matchCandidates.map((t, i) => (
                   <TrackRow key={t.id} track={t} isPlaying={playingId === String(t.id)}
-                    onAdd={addTrack} onPlay={togglePlay} onFindSimilar={findSimilar} onSelectAnchor={selectAnchor} index={i} />
+                    onAdd={addTrack} onPlay={togglePlay} onFindSimilar={findSimilar} onEdit={setEditingTrack} onSelectAnchor={selectAnchor} index={i} />
                 ))}
               </div>
             )}
@@ -1087,12 +1262,25 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
 
             {!showStarters && (
               <div>
+                {directionSummary && (
+                  <div style={{
+                    padding: '8px 16px',
+                    fontSize: 10,
+                    fontFamily: "'JetBrains Mono', monospace",
+                    color: 'var(--cyan, #00d4ff)',
+                    letterSpacing: '0.08em',
+                    opacity: 0.8,
+                    borderBottom: '1px solid rgba(0,212,255,0.1)',
+                  }}>
+                    {directionSummary}
+                  </div>
+                )}
                 {onTrajectory.length > 0 && (
                   <SectionBlock label="ON TRAJECTORY" color="rgba(0,212,255,0.5)">
                     {onTrajectory.map((t, i) => (
                       <TrackRow key={t.id} track={t} isPlaying={playingId === String(t.id)}
                         isAnchor={anchorTrack && String(anchorTrack.id) === String(t.id)}
-                        onAdd={addTrack} onPlay={togglePlay} onFindSimilar={findSimilar} onSelectAnchor={selectAnchor} index={i} />
+                        onAdd={addTrack} onPlay={togglePlay} onFindSimilar={findSimilar} onEdit={setEditingTrack} onSelectAnchor={selectAnchor} index={i} />
                     ))}
                   </SectionBlock>
                 )}
@@ -1102,7 +1290,7 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
                     {energyUp.map((t, i) => (
                       <TrackRow key={t.id} track={t} isPlaying={playingId === String(t.id)}
                         isAnchor={anchorTrack && String(anchorTrack.id) === String(t.id)}
-                        onAdd={addTrack} onPlay={togglePlay} onFindSimilar={findSimilar} onSelectAnchor={selectAnchor} index={i} />
+                        onAdd={addTrack} onPlay={togglePlay} onFindSimilar={findSimilar} onEdit={setEditingTrack} onSelectAnchor={selectAnchor} index={i} />
                     ))}
                   </SectionBlock>
                 )}
@@ -1112,7 +1300,7 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
                     {stepDown.map((t, i) => (
                       <TrackRow key={t.id} track={t} isPlaying={playingId === String(t.id)}
                         isAnchor={anchorTrack && String(anchorTrack.id) === String(t.id)}
-                        onAdd={addTrack} onPlay={togglePlay} onFindSimilar={findSimilar} onSelectAnchor={selectAnchor} index={i} />
+                        onAdd={addTrack} onPlay={togglePlay} onFindSimilar={findSimilar} onEdit={setEditingTrack} onSelectAnchor={selectAnchor} index={i} />
                     ))}
                   </SectionBlock>
                 )}
@@ -1233,6 +1421,7 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
                     onAdd={addTrack}
                     onPlay={togglePlay}
                     onFindSimilar={findSimilar}
+                    onEdit={setEditingTrack}
                     index={i}
                   />
                 ))}
@@ -1247,6 +1436,21 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
           </div>
         </GlassPanel>
       </div>
+
+      {/* Tag editor modal */}
+      <AnimatePresence>
+        {editingTrack && (
+          <TagEditor
+            track={editingTrack}
+            onClose={() => setEditingTrack(null)}
+            onSave={() => {}}
+            availableTags={availableTags}
+            availableVibes={availableVibes}
+          />
+        )}
+      </AnimatePresence>
+      </>
+      )}
     </div>
   );
 }

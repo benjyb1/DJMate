@@ -173,6 +173,33 @@ _SEARCH_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_crate_direction",
+            "description": (
+                "Call this when the user specifies a direction relative to a previous crate or set. "
+                "Examples: 'higher energy', 'different genre', 'bridge to techno', 'slow it down', "
+                "'take it darker', 'maintain the vibe'. "
+                "Use for branching crate generation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["energy_up", "energy_down", "genre_shift", "bridge", "maintain"],
+                        "description": "The broad direction category",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Free-text description of the desired direction",
+                    },
+                },
+                "required": ["direction"],
+            },
+        },
+    },
 ]
 
 
@@ -1200,6 +1227,10 @@ OUTPUT — valid JSON only:
 
             elif fn == "set_track_count":
                 params["track_count"] = max(1, min(20, int(args.get("count", 5))))
+
+            elif fn == "set_crate_direction":
+                params["crate_direction"] = args.get("direction")
+                params["crate_direction_desc"] = args.get("description", "")
 
         # Flat lists for backwards compat with existing search/scoring code
         params["semantic_tags"] = list(params["tag_scores"].keys())

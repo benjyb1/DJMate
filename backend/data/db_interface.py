@@ -689,6 +689,487 @@ class DatabaseManager:
                     f"score={validation_results.get('overall_score', 0.0):.2f}")
         return True
 
+    async def get_track_labels(self, track_id: str) -> Optional[Dict[str, Any]]:
+        """Get labels for a single track from track_labels table."""
+        if not self.client:
+            return None
+
+        try:
+            response = self.client.table("track_labels") \
+                .select("*") \
+                .eq("trackid", track_id) \
+                .single() \
+                .execute()
+            return response.data
+        except Exception as e:
+            logger.error(f"Error fetching track labels for {track_id}: {e}")
+            return None
+
+    async def update_track_labels(
+        self,
+        track_id: str,
+        updates: Dict[str, Any],
+        log_corrections: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Update track labels and optionally log corrections.
+
+        1. Fetch current labels
+        2. If log_corrections, insert correction rows for changed fields
+        3. Upsert track_labels with tag_source='manual'
+        4. Invalidate cache for this track
+        """
+        if not self.client:
+            raise RuntimeError("Supabase client not initialised")
+
+        # 1. Fetch current labels (may be None if row doesn't exist yet)
+        current = await self.get_track_labels(track_id)
+
+        # 2. Log corrections for each changed field
+        if log_corrections and current:
+            for field in ("semantic_tags", "vibe", "energy"):
+                if field not in updates:
+                    continue
+                old_value = current.get(field)
+                new_value = updates[field]
+                # Parse old value so comparison is apples-to-apples
+                if field in ("semantic_tags", "vibe"):
+                    old_value = self._parse_json_field(old_value)
+                if old_value == new_value:
+                    continue
+                correction = {
+                    "trackid": track_id,
+                    "field": field,
+                    "old_value": json.dumps(old_value),
+                    "new_value": json.dumps(new_value),
+                }
+                try:
+                    self.client.table("tag_corrections").insert(correction).execute()
+                except Exception as e:
+                    # Table may not exist yet — warn but don't block the update
+                    logger.warning(f"Failed to log tag correction: {e}")
+
+        # 3. Upsert track_labels
+        payload = {"trackid": track_id, "tag_source": updates.get("tag_source", "manual")}
+        for field in ("semantic_tags", "vibe", "energy"):
+            if field in updates:
+                payload[field] = updates[field]
+
+        self.client.table("track_labels").upsert(payload).execute()
+
+        # 4. Invalidate cache for this track
+        cache_key = self._cache_key("track", track_id=track_id)
+        if self.redis_client:
+            try:
+                self.redis_client.delete(cache_key)
+            except Exception:
+                pass
+
+        # Return the updated row
+        updated = await self.get_track_labels(track_id)
+        return updated or payload
+
+    async def get_available_tags(self) -> Dict[str, List[str]]:
+        """Get all unique semantic_tags and vibes from the database."""
+        if not self.client:
+            return {"semantic_tags": [], "vibes": []}
+
+        try:
+            response = self.client.table("track_labels") \
+                .select("semantic_tags, vibe") \
+                .execute()
+
+            all_tags: set = set()
+            all_vibes: set = set()
+            for row in response.data or []:
+                for tag in self._parse_json_field(row.get("semantic_tags")):
+                    all_tags.add(tag)
+                for vibe in self._parse_json_field(row.get("vibe")):
+                    all_vibes.add(vibe)
+
+            return {
+                "semantic_tags": sorted(all_tags),
+                "vibes": sorted(all_vibes),
+            }
+        except Exception as e:
+            logger.error(f"get_available_tags failed: {e}")
+            return {"semantic_tags": [], "vibes": []}
+
+    # ── Crate operations ─────────────────────────────────────────────────────
+
+    async def create_crate_session(self, session_id: str, name: str) -> Dict[str, Any]:
+        """Create a new crate session."""
+        if not self.client:
+            return {"id": session_id, "name": name, "crates": []}
+        try:
+            payload = {"id": session_id, "name": name}
+            self.client.table("crate_sessions").insert(payload).execute()
+            return {"id": session_id, "name": name, "crates": []}
+        except Exception as e:
+            logger.warning(f"create_crate_session DB insert failed (table may not exist): {e}")
+            return {"id": session_id, "name": name, "crates": []}
+
+    async def get_crate_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get a crate session with all its crates."""
+        if not self.client:
+            return None
+        try:
+            response = self.client.table("crate_sessions") \
+                .select("*").eq("id", session_id).single().execute()
+            if not response.data:
+                return None
+            # Fetch all crates for this session
+            crates_resp = self.client.table("crates") \
+                .select("*").eq("session_id", session_id) \
+                .order("position").execute()
+            crates = []
+            for c in (crates_resp.data or []):
+                crate = await self.get_crate(c["id"])
+                if crate:
+                    crates.append(crate)
+            return {
+                "id": session_id,
+                "name": response.data.get("name", ""),
+                "crates": crates,
+            }
+        except Exception as e:
+            logger.warning(f"get_crate_session failed: {e}")
+            return None
+
+    async def save_crate(self, crate_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Save a generated crate to the database."""
+        if not self.client:
+            return crate_data
+        try:
+            # Save crate metadata
+            crate_row = {
+                "id": crate_data["id"],
+                "session_id": crate_data["session_id"],
+                "parent_crate_id": crate_data.get("parent_crate_id"),
+                "label": crate_data.get("label", ""),
+                "avg_bpm": crate_data.get("metadata", {}).get("avg_bpm"),
+                "avg_energy": crate_data.get("metadata", {}).get("avg_energy"),
+                "dominant_key": crate_data.get("metadata", {}).get("dominant_key"),
+                "dominant_tags": crate_data.get("metadata", {}).get("dominant_tags", []),
+            }
+            self.client.table("crates").upsert(crate_row).execute()
+
+            # Save crate tracks
+            tracks = crate_data.get("tracks", [])
+            for i, t in enumerate(tracks):
+                track_row = {
+                    "crate_id": crate_data["id"],
+                    "trackid": t.get("trackid") or t.get("id"),
+                    "position": i,
+                }
+                self.client.table("crate_tracks").upsert(track_row).execute()
+
+            return crate_data
+        except Exception as e:
+            logger.warning(f"save_crate failed (tables may not exist): {e}")
+            return crate_data
+
+    async def get_crate(self, crate_id: str) -> Optional[Dict[str, Any]]:
+        """Get a crate with its tracks."""
+        if not self.client:
+            return None
+        try:
+            resp = self.client.table("crates") \
+                .select("*").eq("id", crate_id).single().execute()
+            if not resp.data:
+                return None
+
+            # Get tracks
+            tracks_resp = self.client.table("crate_tracks") \
+                .select("trackid, position") \
+                .eq("crate_id", crate_id) \
+                .order("position").execute()
+
+            track_ids = [r["trackid"] for r in (tracks_resp.data or [])]
+            tracks = await self.get_tracks_by_ids(track_ids)
+            track_dicts = []
+            for t in tracks:
+                d = {
+                    "trackid": t.trackid, "title": t.title, "artist": t.artist,
+                    "bpm": t.bpm, "key": t.key, "energy": t.energy,
+                    "semantic_tags": t.semantic_tags or [],
+                    "vibe_descriptors": t.vibe_descriptors or [],
+                }
+                track_dicts.append(d)
+
+            return {
+                "id": crate_id,
+                "session_id": resp.data.get("session_id"),
+                "parent_crate_id": resp.data.get("parent_crate_id"),
+                "label": resp.data.get("label", ""),
+                "tracks": track_dicts,
+                "metadata": {
+                    "avg_bpm": resp.data.get("avg_bpm"),
+                    "avg_energy": resp.data.get("avg_energy"),
+                    "dominant_key": resp.data.get("dominant_key"),
+                    "dominant_tags": resp.data.get("dominant_tags", []),
+                    "track_count": len(track_dicts),
+                },
+            }
+        except Exception as e:
+            logger.warning(f"get_crate failed: {e}")
+            return None
+
+    async def update_crate_tracks(self, crate_id: str, track_ids: List[str]) -> bool:
+        """Update the track list for a crate."""
+        if not self.client:
+            return False
+        try:
+            # Delete existing tracks
+            self.client.table("crate_tracks").delete().eq("crate_id", crate_id).execute()
+            # Insert new tracks
+            for i, tid in enumerate(track_ids):
+                self.client.table("crate_tracks").insert({
+                    "crate_id": crate_id, "trackid": tid, "position": i,
+                }).execute()
+            return True
+        except Exception as e:
+            logger.warning(f"update_crate_tracks failed: {e}")
+            return False
+
+    async def delete_crate(self, crate_id: str) -> bool:
+        """Delete a crate and its children (cascade)."""
+        if not self.client:
+            return False
+        try:
+            # Delete child crates first (recursive)
+            children = self.client.table("crates") \
+                .select("id").eq("parent_crate_id", crate_id).execute()
+            for child in (children.data or []):
+                await self.delete_crate(child["id"])
+            # Delete tracks and crate
+            self.client.table("crate_tracks").delete().eq("crate_id", crate_id).execute()
+            self.client.table("crates").delete().eq("id", crate_id).execute()
+            return True
+        except Exception as e:
+            logger.warning(f"delete_crate failed: {e}")
+            return False
+
+    # ── Online learning operations ──────────────────────────────────────────
+
+    async def get_recent_corrections(self, since_days: int = 30) -> List[Dict[str, Any]]:
+        """Fetch recent tag corrections from the tag_corrections table."""
+        if not self.client:
+            return []
+        try:
+            cutoff = (datetime.utcnow() - timedelta(days=since_days)).isoformat()
+            response = self.client.table("tag_corrections") \
+                .select("*") \
+                .gte("created_at", cutoff) \
+                .order("created_at", desc=True) \
+                .execute()
+            return response.data or []
+        except Exception as e:
+            logger.warning(f"get_recent_corrections failed (table may not exist): {e}")
+            return []
+
+    async def get_auto_tagged_tracks(self) -> List[Dict[str, Any]]:
+        """Fetch tracks with tag_source='auto' that have embeddings."""
+        if not self.client:
+            return []
+        try:
+            # Join tracks (for embedding) with track_labels (for tag_source filter)
+            response = self.client.table("tracks") \
+                .select("trackid, embedding, track_labels!inner(tag_source)") \
+                .not_.is_("embedding", "null") \
+                .eq("track_labels.tag_source", "auto") \
+                .execute()
+            return response.data or []
+        except Exception as e:
+            logger.warning(f"get_auto_tagged_tracks failed (table may not exist): {e}")
+            return []
+
+    async def log_propagation(self, corrections_applied: int, tracks_updated: int) -> None:
+        """Insert a row into correction_propagation_log."""
+        if not self.client:
+            return
+        try:
+            self.client.table("correction_propagation_log").insert({
+                "corrections_applied": corrections_applied,
+                "tracks_updated": tracks_updated,
+                "propagated_at": datetime.utcnow().isoformat(),
+            }).execute()
+        except Exception as e:
+            logger.warning(f"log_propagation failed (table may not exist): {e}")
+
+    async def get_propagation_status(self) -> Optional[Dict[str, Any]]:
+        """Return the most recent propagation log entry and cumulative totals."""
+        if not self.client:
+            return None
+        try:
+            response = self.client.table("correction_propagation_log") \
+                .select("*") \
+                .order("propagated_at", desc=True) \
+                .limit(1) \
+                .execute()
+            rows = response.data or []
+            if not rows:
+                return {"last_propagation": None, "total_propagated": 0}
+
+            latest = rows[0]
+
+            # Sum total propagated tracks across all runs
+            all_resp = self.client.table("correction_propagation_log") \
+                .select("tracks_updated") \
+                .execute()
+            total = sum(r.get("tracks_updated", 0) for r in (all_resp.data or []))
+
+            return {
+                "last_propagation": latest.get("propagated_at"),
+                "total_propagated": total,
+            }
+        except Exception as e:
+            logger.warning(f"get_propagation_status failed (table may not exist): {e}")
+            return None
+
+    # ── Playlist operations ────────────────────────────────────────────────────
+
+    async def create_playlist(
+        self, playlist_id: str, name: str, source: str = "rekordbox", source_path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Create a new playlist."""
+        if not self.client:
+            return {"id": playlist_id, "name": name, "source": source}
+        try:
+            payload = {"id": playlist_id, "name": name, "source": source}
+            if source_path:
+                payload["source_path"] = source_path
+            self.client.table("playlists").insert(payload).execute()
+            return {"id": playlist_id, "name": name, "source": source}
+        except Exception as e:
+            logger.warning(f"create_playlist failed (table may not exist): {e}")
+            return {"id": playlist_id, "name": name, "source": source}
+
+    async def get_playlists(self) -> List[Dict[str, Any]]:
+        """List all playlists with track counts."""
+        if not self.client:
+            return []
+        try:
+            response = self.client.table("playlists") \
+                .select("*") \
+                .order("created_at", desc=True) \
+                .execute()
+
+            playlists = []
+            for row in response.data or []:
+                # Get track count
+                count = 0
+                try:
+                    count_resp = self.client.table("playlist_tracks") \
+                        .select("id", count="exact") \
+                        .eq("playlist_id", row["id"]) \
+                        .execute()
+                    count = count_resp.count if hasattr(count_resp, "count") and count_resp.count else 0
+                except Exception:
+                    pass
+
+                playlists.append({
+                    "id": row["id"],
+                    "name": row.get("name", ""),
+                    "source": row.get("source"),
+                    "track_count": count,
+                    "created_at": row.get("created_at"),
+                })
+            return playlists
+        except Exception as e:
+            logger.warning(f"get_playlists failed (table may not exist): {e}")
+            return []
+
+    async def get_playlist(self, playlist_id: str) -> Optional[Dict[str, Any]]:
+        """Get a playlist with its tracks (joined with tracks table)."""
+        if not self.client:
+            return None
+        try:
+            # Get playlist metadata
+            resp = self.client.table("playlists") \
+                .select("*") \
+                .eq("id", playlist_id) \
+                .single() \
+                .execute()
+            if not resp.data:
+                return None
+
+            # Get ordered track IDs
+            tracks_resp = self.client.table("playlist_tracks") \
+                .select("trackid, position") \
+                .eq("playlist_id", playlist_id) \
+                .order("position") \
+                .execute()
+
+            track_ids = [r["trackid"] for r in (tracks_resp.data or [])]
+            tracks = await self.get_tracks_by_ids(track_ids)
+
+            track_dicts = []
+            for t in tracks:
+                track_dicts.append({
+                    "trackid": t.trackid,
+                    "title": t.title,
+                    "artist": t.artist,
+                    "bpm": t.bpm,
+                    "key": t.key,
+                    "duration": t.duration,
+                    "energy": t.energy,
+                    "semantic_tags": t.semantic_tags or [],
+                    "vibe_descriptors": t.vibe_descriptors or [],
+                })
+
+            return {
+                "id": playlist_id,
+                "name": resp.data.get("name", ""),
+                "source": resp.data.get("source"),
+                "tracks": track_dicts,
+            }
+        except Exception as e:
+            logger.warning(f"get_playlist failed: {e}")
+            return None
+
+    async def update_playlist_tracks(self, playlist_id: str, track_ids: List[str]) -> bool:
+        """Replace all tracks in a playlist with a new ordered list."""
+        if not self.client:
+            return False
+        try:
+            # Delete existing tracks
+            self.client.table("playlist_tracks") \
+                .delete() \
+                .eq("playlist_id", playlist_id) \
+                .execute()
+            # Insert new tracks with position
+            for i, tid in enumerate(track_ids):
+                self.client.table("playlist_tracks").insert({
+                    "playlist_id": playlist_id,
+                    "trackid": tid,
+                    "position": i,
+                }).execute()
+            return True
+        except Exception as e:
+            logger.warning(f"update_playlist_tracks failed: {e}")
+            return False
+
+    async def delete_playlist(self, playlist_id: str) -> bool:
+        """Delete a playlist and its track associations."""
+        if not self.client:
+            return False
+        try:
+            # Delete track associations first
+            self.client.table("playlist_tracks") \
+                .delete() \
+                .eq("playlist_id", playlist_id) \
+                .execute()
+            # Delete playlist
+            self.client.table("playlists") \
+                .delete() \
+                .eq("id", playlist_id) \
+                .execute()
+            return True
+        except Exception as e:
+            logger.warning(f"delete_playlist failed: {e}")
+            return False
+
     async def close(self):
         """Clean up connections."""
         if self.pg_pool:

@@ -5,6 +5,7 @@ import ForceGraph3D from 'react-force-graph-3d';
 import * as THREE from 'three';
 import DJChatbox from './components/DJChatbox';
 import LiveMode from './components/LiveMode';
+import PlaylistOrganiser from './components/PlaylistOrganiser';
 import ShaderBackground from './components/ui/ShaderBackground';
 import GlassPanel from './components/ui/GlassPanel';
 import { makeSupabaseCoverUrl } from './utils/coverUrl';
@@ -123,7 +124,7 @@ function WaveformViz({ bpm, isPlaying }) {
   );
 }
 
-const NAV_TABS = ['DISCOVERY', 'LIVE'];
+const NAV_TABS = ['DISCOVERY', 'LIVE', 'PLAYLISTS'];
 
 export default function App() {
   const reducedMotion = useReducedMotion();
@@ -571,6 +572,21 @@ export default function App() {
               style={{ position: 'absolute', inset: 0 }}
             >
               <LiveMode setList={setList} setSetList={setSetList} allNodes={allNodes} />
+            </m.div>
+          )}
+
+          {/* ── PLAYLISTS TAB ── */}
+          {activeTab === 'PLAYLISTS' && (
+            <m.div
+              key="playlists"
+              variants={tabVariants}
+              initial="initial"
+              animate="enter"
+              exit="exit"
+              transition={{ duration: 0.25 }}
+              style={{ position: 'absolute', inset: 0 }}
+            >
+              <PlaylistOrganiser />
             </m.div>
           )}
 

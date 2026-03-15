@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperat
 import { m, AnimatePresence } from 'framer-motion';
 import { apiClient } from '../api/apiClient';
 import GlassPanel from './ui/GlassPanel';
+import TagEditor from './TagEditor';
 import { makeSupabaseCoverUrl } from '../utils/coverUrl';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -155,7 +156,13 @@ function AlbumArt({ title, artist, directUrl, size = 48 }) {
 }
 
 // ── Track card with framer-motion ──────────────────────────────────────────
-const TrackCard = React.memo(function TrackCard({ rank, track, score, source, onClick, onFindSimilar, isPlaying, onPlay, index = 0 }) {
+const IconEdit = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+  </svg>
+);
+
+const TrackCard = React.memo(function TrackCard({ rank, track, score, source, onClick, onFindSimilar, onEdit, isPlaying, onPlay, index = 0 }) {
   const direction = source ? describeDirection(source, track) : null;
 
   const meta = [];
@@ -308,6 +315,28 @@ const TrackCard = React.memo(function TrackCard({ rank, track, score, source, on
               <IconSearch /> SIMILAR
             </m.button>
           )}
+
+          {/* Edit tags */}
+          {onEdit && (
+            <m.button
+              onClick={e => { e.stopPropagation(); onEdit(track); }}
+              aria-label={`Edit tags for ${track.title}`}
+              whileHover={{ scale: 1.05, borderColor: 'rgba(124,58,237,0.5)', color: '#a855f7' }}
+              whileTap={{ scale: 0.95 }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 3,
+                padding: '1px 8px',
+                background: 'rgba(124,58,237,0.08)',
+                border: '1px solid rgba(124,58,237,0.22)',
+                borderRadius: 'var(--radius-pill)',
+                color: 'rgba(168,85,247,0.6)',
+                cursor: 'pointer', fontSize: 9, fontFamily: 'inherit',
+                letterSpacing: '0.04em',
+              }}
+            >
+              <IconEdit /> EDIT
+            </m.button>
+          )}
         </div>
 
         <SimBar score={score} />
@@ -452,6 +481,7 @@ function SearchResults({ result, source, onTrackClick, onFindSimilar, onCandidat
             source={isSimilar && i === 0 ? null : (isSimilar ? result.tracks[0] : source)}
             onClick={onTrackClick}
             onFindSimilar={onFindSimilar}
+            onEdit={setEditingTrack}
             isPlaying={playingId === String(track.trackid)}
             onPlay={onPlay}
             index={i}
@@ -534,6 +564,9 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
   const [errorMsg,    setErrorMsg]    = useState('');
   const [history,     setHistory]     = useState([]);
   const [playingId,   setPlayingId]   = useState(null);
+  const [editingTrack, setEditingTrack] = useState(null);
+  const [availableTags, setAvailableTags] = useState([]);
+  const [availableVibes, setAvailableVibes] = useState([]);
   const inputRef   = useRef(null);
   const resultsRef = useRef(null);
   const chatAudioRef = useRef(new Audio());
@@ -543,6 +576,14 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
     const a = chatAudioRef.current;
     a.onended = () => setPlayingId(null);
     return () => { a.pause(); a.src = ''; };
+  }, []);
+
+  // Fetch available tags for autocomplete
+  useEffect(() => {
+    apiClient.get('/tags/available').then(data => {
+      setAvailableTags(data.semantic_tags || []);
+      setAvailableVibes(data.vibes || []);
+    }).catch(() => {});
   }, []);
 
   const handlePlay = useCallback((track) => {
@@ -961,6 +1002,30 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
               )}
             </AnimatePresence>
           </m.div>
+        )}
+      </AnimatePresence>
+      {/* Tag editor modal */}
+      <AnimatePresence>
+        {editingTrack && (
+          <TagEditor
+            track={editingTrack}
+            onClose={() => setEditingTrack(null)}
+            onSave={(updated) => {
+              // Update the track in current results with new tags
+              if (result?.tracks) {
+                setResult(prev => ({
+                  ...prev,
+                  tracks: prev.tracks.map(t =>
+                    t.trackid === editingTrack.trackid
+                      ? { ...t, semantic_tags: updated.semantic_tags, vibe_descriptors: updated.vibe_descriptors, energy: updated.energy }
+                      : t
+                  ),
+                }));
+              }
+            }}
+            availableTags={availableTags}
+            availableVibes={availableVibes}
+          />
         )}
       </AnimatePresence>
     </>
