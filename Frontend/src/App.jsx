@@ -6,7 +6,6 @@ import * as THREE from 'three';
 import DJChatbox from './components/DJChatbox';
 import LiveMode from './components/LiveMode';
 import PlaylistOrganiser from './components/PlaylistOrganiser';
-import ShaderBackground from './components/ui/ShaderBackground';
 import GlassPanel from './components/ui/GlassPanel';
 import { makeSupabaseCoverUrl } from './utils/coverUrl';
 
@@ -363,8 +362,6 @@ export default function App() {
       display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column',
       fontFamily: "'Inter', system-ui, sans-serif", position: 'relative', overflow: 'hidden',
     }}>
-      {!reducedMotion && <ShaderBackground />}
-
       <m.div
         initial={{ opacity: 0, scale: 0.9 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -421,7 +418,6 @@ export default function App() {
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       fontFamily: "'Inter', system-ui, sans-serif",
     }}>
-      {!reducedMotion && <ShaderBackground />}
       <GlassPanel style={{ padding: '32px 36px', maxWidth: 420, position: 'relative', zIndex: 1, borderColor: 'rgba(239,68,68,0.25)' }}>
         <div style={{ fontSize: 9, letterSpacing: '0.3em', color: 'rgba(239,68,68,0.7)', fontFamily: 'monospace', marginBottom: 14 }}>
           SYSTEM ERROR
@@ -449,9 +445,6 @@ export default function App() {
   // ── Main UI ─────────────────────────────────────────────────────────────
   return (
     <div style={{ width: '100vw', height: '100vh', background: '#050507', position: 'relative', display: 'flex', flexDirection: 'column' }}>
-
-      {/* Animated shader background */}
-      {!reducedMotion && <ShaderBackground />}
 
       {/* ═══════════ FLOATING PILL NAV ═══════════ */}
       <m.div
