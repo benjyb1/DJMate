@@ -9,6 +9,12 @@ from dotenv import load_dotenv
 from supabase import Client
 from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, RateLimitError
 
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
@@ -173,6 +179,290 @@ _SEARCH_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_crate_direction",
+            "description": (
+                "Call this when the user specifies a direction relative to a previous crate or set. "
+                "Examples: 'higher energy', 'different genre', 'bridge to techno', 'slow it down', "
+                "'take it darker', 'maintain the vibe'. "
+                "Use for branching crate generation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["energy_up", "energy_down", "genre_shift", "bridge", "maintain"],
+                        "description": "The broad direction category",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Free-text description of the desired direction",
+                    },
+                },
+                "required": ["direction"],
+            },
+        },
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# Playlist tool definitions for LLM-driven playlist organisation.
+# ---------------------------------------------------------------------------
+_PLAYLIST_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "create_playlist",
+            "description": (
+                "Create a new playlist and populate it with tracks matching the given criteria. "
+                "Use this when the user asks to make a new playlist, folder, or crate."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name for the new playlist",
+                    },
+                    "criteria": {
+                        "type": "object",
+                        "description": "Filter criteria for which tracks to include",
+                        "properties": {
+                            "genres": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Genre/style tags to match",
+                            },
+                            "vibes": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Vibe/mood descriptors to match",
+                            },
+                            "energy_range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                                "description": "[min, max] energy on 0-1 scale",
+                            },
+                            "bpm_range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                                "description": "[min, max] BPM",
+                            },
+                            "max_tracks": {
+                                "type": "integer",
+                                "description": "Maximum tracks to add (default 40)",
+                            },
+                        },
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_to_playlist",
+            "description": (
+                "Add tracks matching criteria to an existing playlist. "
+                "Use this when the user wants to add more tracks to a playlist that already exists."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "playlist_name": {
+                        "type": "string",
+                        "description": "Name of the existing playlist to add tracks to",
+                    },
+                    "criteria": {
+                        "type": "object",
+                        "description": "Filter criteria for which tracks to add",
+                        "properties": {
+                            "genres": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Genre/style tags to match",
+                            },
+                            "vibes": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Vibe/mood descriptors to match",
+                            },
+                            "energy_range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                                "description": "[min, max] energy on 0-1 scale",
+                            },
+                            "bpm_range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                                "description": "[min, max] BPM",
+                            },
+                            "max_tracks": {
+                                "type": "integer",
+                                "description": "Maximum tracks to add (default 40)",
+                            },
+                        },
+                    },
+                },
+                "required": ["playlist_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "organize_all",
+            "description": (
+                "Organize the entire track library into multiple playlists at once. "
+                "Use this when the user asks to sort, organize, or categorize all their tracks "
+                "into folders/playlists/crates."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "playlists": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "Playlist name",
+                                },
+                                "criteria": {
+                                    "type": "object",
+                                    "description": "Filter criteria for this playlist",
+                                    "properties": {
+                                        "genres": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                        },
+                                        "vibes": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                        },
+                                        "energy_range": {
+                                            "type": "array",
+                                            "items": {"type": "number"},
+                                            "minItems": 2,
+                                            "maxItems": 2,
+                                        },
+                                        "bpm_range": {
+                                            "type": "array",
+                                            "items": {"type": "number"},
+                                            "minItems": 2,
+                                            "maxItems": 2,
+                                        },
+                                        "max_tracks": {
+                                            "type": "integer",
+                                        },
+                                    },
+                                },
+                            },
+                            "required": ["name"],
+                        },
+                        "description": "List of playlists to create with their criteria",
+                    },
+                    "max_per_playlist": {
+                        "type": "integer",
+                        "description": "Default max tracks per playlist (default 40)",
+                    },
+                },
+                "required": ["playlists"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "suggest_for_playlist",
+            "description": (
+                "Suggest tracks that would fit an existing playlist based on its current contents. "
+                "Use this when the user asks for recommendations or suggestions for a playlist."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "playlist_name": {
+                        "type": "string",
+                        "description": "Name of the playlist to suggest tracks for",
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of suggestions (default 10)",
+                    },
+                },
+                "required": ["playlist_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_tracks",
+            "description": (
+                "Move tracks matching criteria from one playlist to another. "
+                "Removes from source and adds to target."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_playlist": {
+                        "type": "string",
+                        "description": "Name of the source playlist to move tracks FROM",
+                    },
+                    "target_playlist": {
+                        "type": "string",
+                        "description": "Name of the target playlist to move tracks TO (will be created if it doesn't exist)",
+                    },
+                    "criteria": {
+                        "type": "object",
+                        "description": "Optional criteria to filter which tracks to move. If omitted, moves ALL tracks.",
+                        "properties": {
+                            "genres": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Genre/style tags to match",
+                            },
+                            "vibes": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Vibe/mood descriptors to match",
+                            },
+                            "energy_range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                                "description": "[min, max] energy on 0.0-1.0 scale",
+                            },
+                            "bpm_range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                                "description": "[min_bpm, max_bpm]",
+                            },
+                        },
+                    },
+                },
+                "required": ["source_playlist", "target_playlist"],
+            },
+        },
+    },
 ]
 
 
@@ -230,6 +520,16 @@ class SemanticInterpreter:
     # -------------------------------------------------------------------------
 
     def _init_providers(self):
+        # Anthropic (Claude) — used as primary for playlist tool-calling
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+        if anthropic_key and HAS_ANTHROPIC:
+            self._anthropic_client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+            self._anthropic_model = "claude-sonnet-4-20250514"
+            logger.info("Anthropic (Claude Sonnet) configured as primary playlist provider")
+        else:
+            self._anthropic_client = None
+            self._anthropic_model = None
+
         if os.getenv("GROQ_API_KEY"):
             self.providers.append({
                 "name": "Groq",
@@ -368,6 +668,182 @@ class SemanticInterpreter:
             result = await self._fallback_interpretation(natural_query, context)
             result["intent"] = intent
             return result
+
+    # -------------------------------------------------------------------------
+    # Public: interpret a playlist organisation command
+    # -------------------------------------------------------------------------
+
+    async def interpret_playlist_command(
+        self,
+        query: str,
+        existing_playlists: list,
+        track_summary: dict,
+    ) -> list:
+        """
+        Convert a natural-language playlist organisation request into a list
+        of structured actions using ``_PLAYLIST_TOOLS``.
+
+        Returns a list of dicts, each like:
+            {"tool": "create_playlist", "args": {"name": "...", "criteria": {...}}}
+        """
+        if not self._tags_loaded:
+            await self._load_available_tags()
+
+        semantic_tags_list = sorted(self.available_tags.semantic_tags)
+        vibes_list = sorted(self.available_tags.vibes)
+
+        # Build existing-playlists block
+        playlist_lines = ""
+        if existing_playlists:
+            for p in existing_playlists:
+                name = p.get("name", "Unnamed")
+                count = p.get("track_count", 0)
+                playlist_lines += f"- {name} ({count} tracks)\n"
+        else:
+            playlist_lines = "(none)\n"
+
+        total_tracks = track_summary.get("total_tracks", 0)
+
+        system_prompt = (
+            "You are a DJ playlist organiser assistant. You help organize music "
+            "tracks into playlists/folders.\n\n"
+            f"Available genres/styles: {', '.join(semantic_tags_list)}\n\n"
+            f"Available vibes: {', '.join(vibes_list)}\n\n"
+            f"Track library: {total_tracks} tracks\n\n"
+            "Existing playlists:\n"
+            f"{playlist_lines}\n"
+            "Use the provided tools to organize tracks. You can create playlists, "
+            "add tracks to existing ones, organize all tracks, or suggest tracks "
+            "for a playlist.\n\n"
+            "RULES:\n"
+            "- Genre/style names in criteria.genres MUST match entries from the "
+            "available genres list exactly.\n"
+            "- Vibe names in criteria.vibes MUST match entries from the available "
+            "vibes list exactly.\n"
+            "- Energy values are on a 0.0-1.0 scale.\n"
+            "- You may call multiple tools in one response."
+        )
+
+        user_prompt = f'Request: "{query}"'
+
+        # Use the provider chain with _PLAYLIST_TOOLS
+        actions = await self._generate_with_playlist_tools(system_prompt, user_prompt)
+        return actions
+
+    async def _generate_with_playlist_tools_claude(
+        self, system_prompt: str, user_prompt: str
+    ) -> List[Dict[str, Any]]:
+        """Use Claude for playlist tool calling (primary provider)."""
+        # Convert OpenAI tool format to Anthropic format
+        anthropic_tools = []
+        for tool in _PLAYLIST_TOOLS:
+            fn = tool["function"]
+            anthropic_tools.append({
+                "name": fn["name"],
+                "description": fn["description"],
+                "input_schema": fn["parameters"],
+            })
+
+        response = await self._anthropic_client.messages.create(
+            model=self._anthropic_model,
+            max_tokens=2048,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+            tools=anthropic_tools,
+        )
+
+        actions = []
+        for block in response.content:
+            if block.type == "tool_use":
+                actions.append({"tool": block.name, "args": block.input})
+        return actions
+
+    async def _generate_with_playlist_tools(
+        self, system_prompt: str, user_prompt: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Call the LLM with ``_PLAYLIST_TOOLS``. Returns a list of action dicts.
+        Falls back provider-by-provider on failure.
+        """
+        # Try Claude first if available
+        if self._anthropic_client:
+            try:
+                actions = await asyncio.wait_for(
+                    self._generate_with_playlist_tools_claude(system_prompt, user_prompt),
+                    timeout=30,
+                )
+                if actions:
+                    logger.info(f"Claude returned {len(actions)} playlist actions")
+                    return actions
+            except Exception as e:
+                logger.warning(f"Claude playlist tool calling failed: {e}, falling back to other providers")
+
+        # Existing provider chain continues below...
+        attempts = 0
+        current_idx = self.active_provider_index
+
+        while attempts < len(self.providers):
+            provider = self.providers[current_idx]
+            try:
+                response = await provider["client"].chat.completions.create(
+                    model=provider["model"],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    tools=_PLAYLIST_TOOLS,
+                    tool_choice="auto",
+                    temperature=0.1,
+                    timeout=20.0,
+                )
+                msg = response.choices[0].message
+                tool_calls = msg.tool_calls or []
+
+                if not tool_calls:
+                    logger.warning(
+                        f"{provider['name']} returned no playlist tool calls — skipping"
+                    )
+                    current_idx = (current_idx + 1) % len(self.providers)
+                    attempts += 1
+                    continue
+
+                if current_idx != self.active_provider_index:
+                    logger.info(f"Switched active provider to {provider['name']}")
+                    self.active_provider_index = current_idx
+
+                # Parse each tool call into an action dict
+                actions = []
+                for call in tool_calls:
+                    try:
+                        args = json.loads(call.function.arguments)
+                    except (json.JSONDecodeError, AttributeError) as e:
+                        logger.warning(f"Could not parse playlist tool args: {e}")
+                        continue
+                    actions.append({
+                        "tool": call.function.name,
+                        "args": args,
+                    })
+
+                logger.info(
+                    f"Playlist tools called: "
+                    f"{[a['tool'] for a in actions]} "
+                    f"via {provider['name']}"
+                )
+                return actions
+
+            except (APITimeoutError, APIConnectionError, RateLimitError) as e:
+                logger.warning(
+                    f"{provider['name']} unavailable ({type(e).__name__}), switching"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"{provider['name']} playlist tool-call error: {e}, switching"
+                )
+
+            current_idx = (current_idx + 1) % len(self.providers)
+            attempts += 1
+
+        raise RuntimeError("All providers failed playlist tool calling.")
 
     # -------------------------------------------------------------------------
     # Intent classification
@@ -1200,6 +1676,10 @@ OUTPUT — valid JSON only:
 
             elif fn == "set_track_count":
                 params["track_count"] = max(1, min(20, int(args.get("count", 5))))
+
+            elif fn == "set_crate_direction":
+                params["crate_direction"] = args.get("direction")
+                params["crate_direction_desc"] = args.get("description", "")
 
         # Flat lists for backwards compat with existing search/scoring code
         params["semantic_tags"] = list(params["tag_scores"].keys())

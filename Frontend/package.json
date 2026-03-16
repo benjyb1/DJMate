@@ -36,6 +36,7 @@
     "lucide-react": "^0.563.0",
     "ml-matrix": "^6.12.1",
     "react": "^18.3.1",
+    "react-beautiful-dnd": "^13.1.1",
     "react-dom": "^18.3.1",
     "react-error-boundary": "^4.1.2",
     "react-force-graph-3d": "^1.29.1",

@@ -23,7 +23,6 @@ export default defineConfig({
       'three',
       '@react-three/fiber',
       '@react-three/drei',
-      'react-beautiful-dnd',
     ],
   },
   server: {
