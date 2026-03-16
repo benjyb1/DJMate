@@ -450,6 +450,29 @@ export default function PlaylistSidebar({
         </span>
       </div>
 
+      {/* All Tracks row */}
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '6px 12px', margin: '0 4px', borderRadius: 4,
+          cursor: 'default',
+          transition: 'background 80ms ease',
+        }}
+      >
+        <span style={{ color: '#475569', display: 'flex' }}>
+          <TrackIcon />
+        </span>
+        <span style={{
+          flex: 1, fontSize: 12, fontWeight: 500,
+          color: '#94a3b8', fontFamily: 'var(--font-ui)',
+        }}>
+          All Tracks
+        </span>
+        <span style={{ fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+          {poolTracks.length}
+        </span>
+      </div>
+
       {/* Library folder tree */}
       <div style={{ overflowY: 'auto', padding: '2px 0', maxHeight: '40vh' }}>
         {fileTreeRoots.map(node => (
@@ -464,6 +487,14 @@ export default function PlaylistSidebar({
             tracksByPath={tracksByPath}
           />
         ))}
+        {poolTracks.length > 0 && fileTreeRoots.length === 0 && (
+          <div style={{
+            padding: '8px 12px', fontSize: 10, color: '#475569',
+            fontFamily: 'var(--font-ui)', fontStyle: 'italic',
+          }}>
+            No folder structure found in track filepaths
+          </div>
+        )}
       </div>
 
       {/* ── Divider ──────────────────────────────────────────────── */}

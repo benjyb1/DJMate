@@ -58,9 +58,17 @@ export default function SuggestionsPanel({
         padding: 30, minHeight: 160,
         borderTop: '1px solid var(--glass-border)',
       }}>
-        <svg width="36" height="36" viewBox="0 0 36 36" fill="none" style={{ opacity: 0.25, marginBottom: 12 }}>
-          <circle cx="18" cy="18" r="14" stroke="#64748b" strokeWidth="1.5"/>
-          <path d="M14 22c1-2 6-2 8 0M14 15h.01M22 15h.01" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round"/>
+        <svg width="36" height="36" viewBox="0 0 36 36" fill="none" style={{ opacity: 0.3, marginBottom: 12 }}>
+          {/* Robot head */}
+          <rect x="8" y="10" width="20" height="18" rx="4" stroke="#64748b" strokeWidth="1.5"/>
+          {/* Antenna */}
+          <line x1="18" y1="10" x2="18" y2="5" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round"/>
+          <circle cx="18" cy="4" r="1.5" fill="#64748b"/>
+          {/* Eyes */}
+          <circle cx="14" cy="18" r="2" stroke="#64748b" strokeWidth="1.5"/>
+          <circle cx="22" cy="18" r="2" stroke="#64748b" strokeWidth="1.5"/>
+          {/* Mouth */}
+          <line x1="14" y1="24" x2="22" y2="24" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round"/>
         </svg>
         <p style={{ fontSize: 12, color: '#64748b', fontFamily: 'var(--font-ui)', textAlign: 'center', marginBottom: 4 }}>
           Ask the AI to suggest tracks or create a playlist
