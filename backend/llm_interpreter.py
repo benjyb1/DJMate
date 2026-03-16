@@ -206,6 +206,32 @@ _SEARCH_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_similar_track",
+            "description": (
+                "Call this when the user names a specific song or artist and wants similar tracks. "
+                "Examples: 'songs like God\\'s Plan', 'find me tracks like Strobe', "
+                "'more like Eric Prydz', 'something similar to that Bicep track'. "
+                "Do NOT call this for genre/vibe descriptions like 'dark techno' or 'groovy house'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "track_name": {
+                        "type": "string",
+                        "description": "The track title, artist name, or combined reference the user mentioned",
+                    },
+                    "modifier": {
+                        "type": "string",
+                        "description": "Optional direction modifier like 'higher energy', 'darker', 'faster', or null if none",
+                    },
+                },
+                "required": ["track_name"],
+            },
+        },
+    },
 ]
 
 
@@ -602,9 +628,10 @@ class SemanticInterpreter:
         """
         Convert a natural language DJ request to structured search parameters.
 
-        Step 1: Classify the intent (find_similar_track | vibe_genre_search |
-                transition_from_current).
-        Step 2: Route to the appropriate interpretation path.
+        Uses a single LLM tool-calling step that handles both intent detection
+        and parameter extraction. The LLM chooses between find_similar_track
+        (for "songs like X" queries) and the genre/vibe/energy tools (for
+        descriptive queries). Transition intent is inferred from context.
 
         Returns a dict that always includes:
           - intent: str
@@ -622,30 +649,46 @@ class SemanticInterpreter:
         if not self.providers:
             return await self._fallback_interpretation(natural_query, context)
 
-        # ── Step 1: classify intent ───────────────────────────────────────────
-        intent_result = await self._classify_intent(natural_query, context)
-        intent = intent_result.get("intent", "vibe_genre_search")
-        logger.info(f"🎯 Intent: {intent} — '{natural_query}'")
+        # Determine if this is a transition request (current track context exists
+        # and the query references it directionally).
+        has_current_track = bool(context and context.current_track)
+        intent = "vibe_genre_search"  # default; overridden below if tools say otherwise
 
-        # ── Step 2: route ─────────────────────────────────────────────────────
-        if intent == "find_similar_track":
-            try:
-                return await self._interpret_find_similar(natural_query, intent_result, context)
-            except Exception as e:
-                logger.error(f"find_similar_track failed: {e}")
-                result = await self._fallback_interpretation(natural_query, context)
-                result["intent"] = intent
-                return result
-
-        # vibe_genre_search or transition_from_current:
-        # Primary path — tool calling (LLM decides which tools to call)
+        # ── Single LLM call: tool-calling with all tools (including find_similar_track) ──
         user_prompt = self._build_user_prompt(natural_query)
         try:
             system_prompt = self._build_system_prompt_tools(context, intent=intent)
             params = await self._generate_with_tools(system_prompt, user_prompt)
+
+            # If the LLM called find_similar_track, route to similarity path
+            if params.get("_find_similar_track"):
+                fst = params["_find_similar_track"]
+                intent_result = {
+                    "track_name": fst.get("track_name", ""),
+                    "modifier": fst.get("modifier"),
+                    "model_used": params.get("model_used", "tool-calling"),
+                }
+                logger.info(f"🎯 Intent: find_similar_track — '{natural_query}'")
+                try:
+                    return await self._interpret_find_similar(
+                        natural_query, intent_result, context,
+                    )
+                except Exception as e:
+                    logger.error(f"find_similar_track failed: {e}")
+                    result = await self._fallback_interpretation(natural_query, context)
+                    result["intent"] = "find_similar_track"
+                    return result
+
+            # Determine intent from context: if current track is playing and
+            # the LLM used crate_direction or the query is context-relative,
+            # treat as transition.
+            if has_current_track and params.get("crate_direction"):
+                intent = "transition_from_current"
+
             params["intent"] = intent
             params.setdefault("track_count", 5)
             params.setdefault("confidence",  0.9)
+            logger.info(f"🎯 Intent: {intent} — '{natural_query}'")
             # Widen BPM range if too narrow
             if params.get("bpm_range"):
                 lo, hi = params["bpm_range"]
@@ -721,6 +764,9 @@ class SemanticInterpreter:
             "- Vibe names in criteria.vibes MUST match entries from the available "
             "vibes list exactly.\n"
             "- Energy values are on a 0.0-1.0 scale.\n"
+            "- Choose an appropriate number of tracks based on context. "
+            "For a full playlist, use 12-25 tracks. For suggestions, use "
+            "8-15 tracks. Minimum 5 tracks. Do not hardcode to exactly 5.\n"
             "- You may call multiple tools in one response."
         )
 
@@ -1681,6 +1727,12 @@ OUTPUT — valid JSON only:
                 params["crate_direction"] = args.get("direction")
                 params["crate_direction_desc"] = args.get("description", "")
 
+            elif fn == "find_similar_track":
+                params["_find_similar_track"] = {
+                    "track_name": args.get("track_name", ""),
+                    "modifier": args.get("modifier"),
+                }
+
         # Flat lists for backwards compat with existing search/scoring code
         params["semantic_tags"] = list(params["tag_scores"].keys())
         params["vibes"]         = list(params["vibe_scores"].keys())
@@ -1738,6 +1790,8 @@ AVAILABLE VIBES (use these exact names in set_vibe):
 {json.dumps(vibes_list)}
 
 RULES:
+- If the user names a specific song or artist and wants similar tracks → call find_similar_track.
+  Do NOT also call set_genre/set_vibe in that case.
 - Genre words (house, techno, drum and bass, ambient…) → set_genre
 - Adjective/mood/atmosphere words (dark, warm, bouncy, driving…) → set_vibe
 - Genre and vibe are INDEPENDENT axes. Never put a vibe in set_genre or vice versa.

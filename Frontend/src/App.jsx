@@ -5,7 +5,7 @@ import ForceGraph3D from 'react-force-graph-3d';
 import * as THREE from 'three';
 import DJChatbox from './components/DJChatbox';
 import LiveMode from './components/LiveMode';
-import PlaylistOrganiser from './components/PlaylistOrganiser';
+import PlaylistOrganiser from './components/playlist/PlaylistOrganiser';
 import GlassPanel from './components/ui/GlassPanel';
 import { makeSupabaseCoverUrl } from './utils/coverUrl';
 

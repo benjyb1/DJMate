@@ -414,6 +414,126 @@ async def organize_playlists(req: OrganizeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class SuggestTracksRequest(BaseModel):
+    query: str
+    playlist_id: Optional[str] = None
+
+
+@router.post("/suggest-tracks")
+async def suggest_tracks(req: SuggestTracksRequest):
+    """Preview mode: LLM interprets query and returns matching tracks WITHOUT persisting.
+
+    Returns:
+        mode: "playlist" if LLM wants to create a playlist (includes name),
+              "tracks" if LLM is just suggesting tracks
+        name: playlist name (only if mode == "playlist")
+        tracks: list of matching track dicts
+        message: summary text
+    """
+    try:
+        db = _get_db()
+
+        # 1. Existing playlists for context
+        existing_playlists = await db.get_playlist_tree()
+
+        # 2. Track summary
+        track_pool = await db.get_track_pool()
+        total_tracks = len(track_pool)
+        sample_tags: set = set()
+        sample_vibes: set = set()
+        for t in track_pool[:200]:
+            for tag in (t.get("semantic_tags") or []):
+                sample_tags.add(tag)
+            for v in (t.get("vibe") or []):
+                sample_vibes.add(v)
+        track_summary = {
+            "total_tracks": total_tracks,
+            "sample_tags": list(sample_tags),
+            "sample_vibes": list(sample_vibes),
+        }
+
+        # 3. If suggesting for an existing playlist, include its context
+        if req.playlist_id:
+            playlist = await db.get_playlist(req.playlist_id)
+            if playlist and playlist.get("tracks"):
+                existing_track_names = [
+                    f"{t.get('artist', '?')} - {t.get('title', '?')}"
+                    for t in playlist["tracks"][:20]
+                ]
+                track_summary["current_playlist_tracks"] = existing_track_names
+
+        # 4. Interpret the command via LLM
+        from backend.llm_interpreter import SemanticInterpreter
+        interp = SemanticInterpreter(supabase_client=db.client)
+        await interp.initialize()
+        actions = await interp.interpret_playlist_command(
+            req.query, existing_playlists, track_summary
+        )
+
+        # 5. Process actions in PREVIEW mode (no DB writes)
+        mode = "tracks"
+        name = None
+        all_tracks = []
+
+        for action in actions:
+            tool = action["tool"]
+            args = action.get("args", {})
+
+            if tool == "create_playlist":
+                mode = "playlist"
+                name = args.get("name", "Suggested Playlist")
+                criteria = args.get("criteria", {})
+                tracks = await _query_tracks_by_criteria(db, criteria)
+                all_tracks.extend(tracks)
+
+            elif tool == "organize_all":
+                mode = "playlist"
+                playlists_spec = args.get("playlists", [])
+                if playlists_spec:
+                    # Use the first playlist's name
+                    name = playlists_spec[0].get("name", "Suggested Playlist")
+                    for spec in playlists_spec:
+                        criteria = spec.get("criteria", {})
+                        tracks = await _query_tracks_by_criteria(db, criteria)
+                        all_tracks.extend(tracks)
+
+            elif tool in ("suggest_for_playlist", "add_to_playlist"):
+                criteria = args.get("criteria", {})
+                tracks = await _query_tracks_by_criteria(db, criteria)
+                all_tracks.extend(tracks)
+
+            elif tool == "move_tracks":
+                criteria = args.get("criteria", {})
+                if criteria:
+                    tracks = await _query_tracks_by_criteria(db, criteria)
+                    all_tracks.extend(tracks)
+
+        # Dedupe by trackid
+        seen = set()
+        unique_tracks = []
+        for t in all_tracks:
+            tid = t.get("trackid") or t.get("id")
+            if tid and tid not in seen:
+                seen.add(tid)
+                unique_tracks.append(t)
+
+        track_count = len(unique_tracks)
+        return {
+            "mode": mode,
+            "name": name,
+            "tracks": unique_tracks,
+            "message": (
+                f'Created "{name}" with {track_count} tracks'
+                if mode == "playlist"
+                else f"Found {track_count} matching tracks"
+            ),
+        }
+
+    except Exception as e:
+        logger.error(f"Suggest tracks error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{playlist_id}", response_model=PlaylistDetail)
 async def get_playlist(playlist_id: str):
     """Get a playlist with its tracks."""
