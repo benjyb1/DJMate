@@ -2,44 +2,153 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { LazyMotion, domAnimation, m, AnimatePresence } from 'framer-motion';
 import { apiClient } from '../api/apiClient';
+import { supabase } from '../utils/supabaseClient';
 import GlassPanel from './ui/GlassPanel';
 import { makeSupabaseCoverUrl } from '../utils/coverUrl';
 
-// ── LibraryPlaylist ──────────────────────────────────────────────────────────
-function LibraryPlaylist({ playlist, isSelected, onClick }) {
+// ── Build folder tree from filepaths ─────────────────────────────────────────
+function buildFolderTree(tracks) {
+  const root = { name: 'Music', children: {}, tracks: [], path: '' };
+
+  // Find the common prefix across all filepaths
+  const paths = tracks.map(t => t.filepath).filter(Boolean);
+  if (paths.length === 0) return root;
+
+  const parts = paths.map(p => p.split('/').filter(Boolean));
+  let commonDepth = 0;
+  if (parts.length > 0) {
+    const first = parts[0];
+    outer:
+    for (let i = 0; i < first.length; i++) {
+      for (let j = 1; j < parts.length; j++) {
+        if (!parts[j][i] || parts[j][i] !== first[i]) break outer;
+      }
+      commonDepth = i + 1;
+    }
+  }
+
+  for (const track of tracks) {
+    if (!track.filepath) continue;
+    const segments = track.filepath.split('/').filter(Boolean).slice(commonDepth);
+    const folderSegments = segments.slice(0, -1); // everything except filename
+    let node = root;
+    let currentPath = '';
+    for (const seg of folderSegments) {
+      currentPath += '/' + seg;
+      if (!node.children[seg]) {
+        node.children[seg] = { name: seg, children: {}, tracks: [], path: currentPath };
+      }
+      node = node.children[seg];
+    }
+    node.tracks.push(track);
+  }
+
+  return root;
+}
+
+function countTreeTracks(node) {
+  let count = node.tracks.length;
+  for (const child of Object.values(node.children)) {
+    count += countTreeTracks(child);
+  }
+  return count;
+}
+
+function collectTreeTracks(node) {
+  let result = [...node.tracks];
+  for (const child of Object.values(node.children)) {
+    result = result.concat(collectTreeTracks(child));
+  }
+  return result;
+}
+
+// ── FolderTreeNode ───────────────────────────────────────────────────────────
+function FolderTreeNode({ node, depth, selectedPath, onSelect }) {
+  const [expanded, setExpanded] = useState(depth < 1);
+  const childKeys = Object.keys(node.children).sort((a, b) => a.localeCompare(b));
+  const hasChildren = childKeys.length > 0;
+  const trackCount = countTreeTracks(node);
+  const isSelected = selectedPath === node.path;
+
   return (
-    <m.div
-      onClick={onClick}
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.97 }}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '8px 12px', margin: '1px 0',
-        borderRadius: 'var(--radius-sm)',
-        cursor: 'pointer',
-        background: isSelected ? 'rgba(0,212,255,0.08)' : 'transparent',
-        border: isSelected ? '1px solid rgba(0,212,255,0.25)' : '1px solid transparent',
-        transition: 'background 120ms ease, border-color 120ms ease',
-      }}
-    >
-      <span style={{ color: isSelected ? '#a855f7' : '#475569', display: 'flex', flexShrink: 0 }}>
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4c0-.6.4-1 1-1h3.6l1.4 1.5H13c.6 0 1 .4 1 1V12c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V4z" stroke="currentColor" strokeWidth="1.2"/></svg>
-      </span>
-      <span style={{
-        flex: 1, minWidth: 0, fontSize: 11, fontWeight: 600,
-        color: isSelected ? '#e2e8f0' : '#94a3b8',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        fontFamily: 'var(--font-ui)',
-      }}>
-        {playlist.name}
-      </span>
-      <span style={{
-        fontSize: 9, color: '#475569', flexShrink: 0,
-        fontFamily: 'var(--font-mono)',
-      }}>
-        {playlist.track_count ?? 0}
-      </span>
-    </m.div>
+    <div>
+      <m.div
+        onClick={() => {
+          if (hasChildren) setExpanded(v => !v);
+          onSelect(node);
+        }}
+        whileHover={{ scale: 1.01 }}
+        whileTap={{ scale: 0.98 }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '5px 8px', margin: '1px 0',
+          paddingLeft: 8 + depth * 14,
+          borderRadius: 'var(--radius-sm)',
+          cursor: 'pointer',
+          background: isSelected ? 'rgba(0,212,255,0.08)' : 'transparent',
+          border: isSelected ? '1px solid rgba(0,212,255,0.25)' : '1px solid transparent',
+          transition: 'background 120ms ease, border-color 120ms ease',
+        }}
+      >
+        {/* Expand/collapse chevron */}
+        {hasChildren ? (
+          <span style={{
+            color: '#475569', display: 'flex', flexShrink: 0,
+            transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+            transition: 'transform 150ms ease',
+          }}>
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+              <path d="M4 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </span>
+        ) : (
+          <span style={{ width: 10, flexShrink: 0 }} />
+        )}
+
+        {/* Folder icon */}
+        <span style={{ color: isSelected ? '#a855f7' : '#475569', display: 'flex', flexShrink: 0 }}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M2 4c0-.6.4-1 1-1h3.6l1.4 1.5H13c.6 0 1 .4 1 1V12c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V4z"
+              stroke="currentColor" strokeWidth="1.2"
+              fill={isSelected ? 'rgba(168,85,247,0.15)' : 'none'}
+            />
+          </svg>
+        </span>
+
+        {/* Folder name */}
+        <span style={{
+          flex: 1, minWidth: 0, fontSize: 11, fontWeight: 600,
+          color: isSelected ? '#e2e8f0' : '#94a3b8',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          fontFamily: 'var(--font-ui)',
+        }}>
+          {node.name}
+        </span>
+
+        {/* Track count */}
+        <span style={{
+          fontSize: 9, color: '#475569', flexShrink: 0,
+          fontFamily: 'var(--font-mono)',
+        }}>
+          {trackCount}
+        </span>
+      </m.div>
+
+      {/* Children */}
+      {hasChildren && expanded && (
+        <div>
+          {childKeys.map(key => (
+            <FolderTreeNode
+              key={node.children[key].path}
+              node={node.children[key]}
+              depth={depth + 1}
+              selectedPath={selectedPath}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -497,9 +606,10 @@ function MiniTrackCard({ track, isPlaying, onPlay }) {
 
 // ── Main Component ───────────────────────────────────────────────────────────
 export default function PlaylistOrganiser() {
-  // Library (source)
-  const [libraryPlaylists, setLibraryPlaylists] = useState([]);
-  const [selectedSource, setSelectedSource] = useState('pool');
+  // Library (source) — folder tree from Supabase filepaths
+  const [folderTree, setFolderTree] = useState(null);
+  const [allTracks, setAllTracks] = useState([]);
+  const [selectedFolderPath, setSelectedFolderPath] = useState('');
   const [sourceTracks, setSourceTracks] = useState([]);
 
   // Workspace (destination)
@@ -526,30 +636,27 @@ export default function PlaylistOrganiser() {
   const [newFolderName, setNewFolderName] = useState('');
   const [loadError, setLoadError] = useState(null);
 
-  // ── Data fetching ──────────────────────────────────────────────────────────
-  const fetchLibrary = useCallback(async () => {
+  // ── Data fetching — build folder tree from Supabase filepaths ─────────────
+  const fetchTracks = useCallback(async () => {
     try {
-      const data = await apiClient.get('/playlists/tree');
-      setLibraryPlaylists(Array.isArray(data) ? data : data.playlists || []);
+      const { data, error: err } = await supabase
+        .from('tracks')
+        .select('trackid,title,artist,bpm,key,audio_url,filepath,album_art_url');
+      if (err) throw err;
+      const tracks = data || [];
+      setAllTracks(tracks);
+      setSourceTracks(tracks);
+      const tree = buildFolderTree(tracks);
+      setFolderTree(tree);
       setLoadError(null);
     } catch (err) {
       setLoadError(err.message);
     }
   }, []);
 
-  const fetchPool = useCallback(async () => {
-    try {
-      const data = await apiClient.get('/playlists/pool');
-      setSourceTracks(Array.isArray(data) ? data : data.tracks || []);
-    } catch (err) {
-      console.error('Failed to fetch pool:', err);
-    }
-  }, []);
-
   useEffect(() => {
-    fetchLibrary();
-    fetchPool();
-  }, [fetchLibrary, fetchPool]);
+    fetchTracks();
+  }, [fetchTracks]);
 
   // Audio cleanup
   useEffect(() => {
@@ -562,22 +669,18 @@ export default function PlaylistOrganiser() {
     };
   }, []);
 
-  // ── Source selection ────────────────────────────────────────────────────────
-  const handleSelectSource = useCallback(async (sourceId) => {
-    setSelectedSource(sourceId);
+  // ── Folder selection — show tracks from selected folder ──────────────────
+  const handleSelectFolder = useCallback((node) => {
+    setSelectedFolderPath(node.path);
     setSelectedTrackIds(new Set());
     setLastSelectedIndex(null);
-    if (sourceId === 'pool') {
-      await fetchPool();
+    if (node.path === '') {
+      // Root = all tracks
+      setSourceTracks(allTracks);
     } else {
-      try {
-        const data = await apiClient.get(`/playlists/${sourceId}`);
-        setSourceTracks(data.tracks || []);
-      } catch (err) {
-        console.error(err);
-      }
+      setSourceTracks(collectTreeTracks(node));
     }
-  }, [fetchPool]);
+  }, [allTracks]);
 
   // ── Filter tracks ──────────────────────────────────────────────────────────
   const getDisplayedTracks = useCallback(() => {
@@ -640,15 +743,13 @@ export default function PlaylistOrganiser() {
           ...p,
           track_count: p.track_count || 0,
         }));
-        const newOnes = all.filter(p =>
-          !existing.has(p.id) && !libraryPlaylists.some(lp => lp.id === p.id)
-        );
+        const newOnes = all.filter(p => !existing.has(p.id));
         return [...updated, ...newOnes.map(p => ({ ...p, track_count: p.track_count || 0 }))];
       });
     } catch (err) {
       console.error(err);
     }
-  }, [libraryPlaylists]);
+  }, []);
 
   const handleDropOnFolder = useCallback(async (folderId, e) => {
     e.preventDefault();
@@ -689,11 +790,10 @@ export default function PlaylistOrganiser() {
       await apiClient.delete(`/playlists/${folderId}`);
       setWorkspaceFolders(prev => prev.filter(f => f.id !== folderId));
       if (expandedFolderId === folderId) setExpandedFolderId(null);
-      await fetchLibrary();
     } catch (err) {
       console.error('Failed to delete folder:', err);
     }
-  }, [expandedFolderId, fetchLibrary]);
+  }, [expandedFolderId]);
 
   // ── Audio playback ─────────────────────────────────────────────────────────
   const handlePlayTrack = useCallback((track) => {
@@ -724,14 +824,13 @@ export default function PlaylistOrganiser() {
         setSuggestedTracks(data.suggested_tracks);
       }
       await refreshWorkspaceFolders();
-      await fetchLibrary();
     } catch (err) {
       setChatFeedback(`Error: ${err.message}`);
     } finally {
       setChatStatus('done');
       setChatQuery('');
     }
-  }, [refreshWorkspaceFolders, fetchLibrary]);
+  }, [refreshWorkspaceFolders]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -761,19 +860,19 @@ export default function PlaylistOrganiser() {
               fontSize: 11, fontFamily: 'var(--font-mono)',
               letterSpacing: 2, color: '#94a3b8',
             }}>
-              LIBRARY
+              FOLDERS
             </span>
             <span style={{
               fontSize: 11, fontFamily: 'var(--font-mono)', color: '#475569',
             }}>
-              {libraryPlaylists.length}
+              {allTracks.length}
             </span>
           </div>
 
           {/* All Tracks button */}
           <div style={{ padding: '4px 8px' }}>
             <m.button
-              onClick={() => handleSelectSource('pool')}
+              onClick={() => { setSelectedFolderPath(''); setSourceTracks(allTracks); }}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.97 }}
               style={{
@@ -782,17 +881,17 @@ export default function PlaylistOrganiser() {
                 padding: '8px 12px',
                 borderRadius: 'var(--radius-sm)',
                 cursor: 'pointer',
-                background: selectedSource === 'pool' ? 'rgba(0,212,255,0.08)' : 'transparent',
-                border: selectedSource === 'pool'
+                background: selectedFolderPath === '' ? 'rgba(0,212,255,0.08)' : 'transparent',
+                border: selectedFolderPath === ''
                   ? '1px solid rgba(0,212,255,0.25)'
                   : '1px solid transparent',
-                color: selectedSource === 'pool' ? '#e2e8f0' : '#94a3b8',
+                color: selectedFolderPath === '' ? '#e2e8f0' : '#94a3b8',
                 fontSize: 11, fontWeight: 600,
                 fontFamily: 'var(--font-ui)',
                 transition: 'background 120ms ease, border-color 120ms ease',
               }}
             >
-              <span style={{ color: selectedSource === 'pool' ? '#00d4ff' : '#475569', display: 'flex' }}>
+              <span style={{ color: selectedFolderPath === '' ? '#00d4ff' : '#475569', display: 'flex' }}>
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 12V3l7-2v9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><circle cx="4" cy="12" r="2" stroke="currentColor" strokeWidth="1.2"/><circle cx="11" cy="10" r="2" stroke="currentColor" strokeWidth="1.2"/></svg>
               </span>
               All Tracks
@@ -800,12 +899,12 @@ export default function PlaylistOrganiser() {
                 marginLeft: 'auto', fontSize: 9, color: '#475569',
                 fontFamily: 'var(--font-mono)',
               }}>
-                {sourceTracks.length}
+                {allTracks.length}
               </span>
             </m.button>
           </div>
 
-          {/* Library playlist list (scrollable) */}
+          {/* Folder tree (scrollable) */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px' }}>
             {loadError && (
               <div style={{
@@ -815,16 +914,15 @@ export default function PlaylistOrganiser() {
                 {loadError}
               </div>
             )}
-            <AnimatePresence>
-              {libraryPlaylists.map(pl => (
-                <LibraryPlaylist
-                  key={pl.id}
-                  playlist={pl}
-                  isSelected={selectedSource === pl.id}
-                  onClick={() => handleSelectSource(pl.id)}
-                />
-              ))}
-            </AnimatePresence>
+            {folderTree && Object.keys(folderTree.children).sort((a, b) => a.localeCompare(b)).map(key => (
+              <FolderTreeNode
+                key={folderTree.children[key].path}
+                node={folderTree.children[key]}
+                depth={0}
+                selectedPath={selectedFolderPath}
+                onSelect={handleSelectFolder}
+              />
+            ))}
           </div>
         </GlassPanel>
 
