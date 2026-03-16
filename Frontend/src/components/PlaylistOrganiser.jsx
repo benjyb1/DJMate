@@ -22,6 +22,118 @@ function buildTree(flatList) {
   return roots;
 }
 
+/** Build a virtual folder tree from track filepaths.
+ *  Returns { roots: [node], tracksByPath: { "/full/path": [track, ...] } }
+ *  Each node: { id: path, name, children: [], trackCount }
+ */
+function buildFileTree(tracks) {
+  const dirMap = {};      // path → { id, name, children: Set, trackCount }
+  const tracksByPath = {}; // path → [track, ...]
+
+  // Find common prefix to strip (e.g. /Users/benjyb/Music/)
+  const allDirs = [];
+  for (const t of tracks) {
+    if (!t.filepath) continue;
+    const parts = t.filepath.split('/');
+    parts.pop(); // remove filename
+    const dir = parts.join('/');
+    if (dir) allDirs.push(dir);
+  }
+  // Find longest common prefix
+  let prefix = '';
+  if (allDirs.length > 0) {
+    const sorted = allDirs.slice().sort();
+    const first = sorted[0].split('/');
+    const last = sorted[sorted.length - 1].split('/');
+    const common = [];
+    for (let i = 0; i < first.length && i < last.length; i++) {
+      if (first[i] === last[i]) common.push(first[i]);
+      else break;
+    }
+    prefix = common.join('/');
+  }
+
+  for (const t of tracks) {
+    if (!t.filepath) continue;
+    const parts = t.filepath.split('/');
+    const filename = parts.pop();
+    const dir = parts.join('/');
+
+    // Add track to its directory
+    if (!tracksByPath[dir]) tracksByPath[dir] = [];
+    tracksByPath[dir].push(t);
+
+    // Build all ancestor directories
+    for (let i = 1; i <= parts.length; i++) {
+      const path = parts.slice(0, i).join('/');
+      if (!dirMap[path]) {
+        dirMap[path] = { id: 'lib:' + path, path, name: parts[i - 1], childPaths: new Set(), trackCount: 0 };
+      }
+    }
+    dirMap[dir].trackCount++;
+
+    // Register parent → child relationships
+    for (let i = 2; i <= parts.length; i++) {
+      const parent = parts.slice(0, i - 1).join('/');
+      const child = parts.slice(0, i).join('/');
+      dirMap[parent].childPaths.add(child);
+    }
+  }
+
+  // Convert to tree nodes, stripping the common prefix
+  const prefixParts = prefix ? prefix.split('/') : [];
+  const prefixDepth = prefixParts.length;
+
+  // Find nodes whose depth === prefixDepth (these become roots)
+  const roots = [];
+  const nodeMap = {};
+
+  for (const [path, info] of Object.entries(dirMap)) {
+    const depth = path.split('/').length;
+    if (depth <= prefixDepth) continue; // skip common prefix ancestors
+
+    // Count total tracks recursively
+    let totalTracks = info.trackCount;
+    const countDescendants = (p) => {
+      const d = dirMap[p];
+      if (!d) return 0;
+      let c = d.trackCount;
+      for (const cp of d.childPaths) c += countDescendants(cp);
+      return c;
+    };
+    totalTracks = countDescendants(path);
+
+    const node = {
+      id: 'lib:' + path,
+      path,
+      name: info.name,
+      children: [],
+      track_count: totalTracks,
+      directTracks: info.trackCount,
+    };
+    nodeMap[path] = node;
+  }
+
+  // Build parent-child links
+  for (const [path, info] of Object.entries(dirMap)) {
+    if (!nodeMap[path]) continue;
+    for (const cp of info.childPaths) {
+      if (nodeMap[cp]) nodeMap[path].children.push(nodeMap[cp]);
+    }
+    // Sort children alphabetically
+    nodeMap[path].children.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // Roots = nodes at prefixDepth + 1
+  for (const [path, node] of Object.entries(nodeMap)) {
+    const depth = path.split('/').length;
+    if (depth === prefixDepth + 1) roots.push(node);
+  }
+  roots.sort((a, b) => a.name.localeCompare(b.name));
+
+  return { roots, tracksByPath };
+}
+
 // ── SVG icons ───────────────────────────────────────────────────────────────
 const ChevronIcon = ({ open }) => (
   <svg width="10" height="10" viewBox="0 0 10 10" fill="none"
@@ -172,6 +284,93 @@ function FolderTreeNode({
               Empty -- drag tracks here
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── LibraryTreeNode (read-only source tree from filepaths, drag FROM) ────────
+function LibraryTreeNode({ node, depth, selectedId, expandedIds, onToggleExpand, onSelect, tracksByPath }) {
+  const isExpanded = expandedIds.has(node.id);
+  const isSelected = selectedId === node.id;
+  const hasChildren = node.children && node.children.length > 0;
+  const directTracks = tracksByPath[node.path] || [];
+
+  return (
+    <div>
+      <div
+        onClick={() => { onToggleExpand(node.id); onSelect(node.id, node.path); }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 4,
+          padding: '4px 8px 4px ' + (8 + depth * 16) + 'px',
+          cursor: 'pointer',
+          background: isSelected ? 'rgba(0,212,255,0.08)' : 'transparent',
+          borderRadius: 4, margin: '0 4px',
+          transition: 'background 80ms ease',
+          minHeight: 26,
+        }}
+      >
+        <span style={{ color: '#64748b', display: 'flex', width: 10 }}>
+          {(hasChildren || directTracks.length > 0) && <ChevronIcon open={isExpanded} />}
+        </span>
+        <span style={{ color: isSelected ? '#00d4ff' : '#64748b', display: 'flex' }}>
+          <FolderIcon open={isExpanded} />
+        </span>
+        <span style={{
+          flex: 1, minWidth: 0, fontSize: 12, fontWeight: isSelected ? 600 : 500,
+          color: isSelected ? '#e2e8f0' : '#94a3b8',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          fontFamily: 'var(--font-ui)',
+        }}>
+          {node.name}
+        </span>
+        {node.track_count > 0 && (
+          <span style={{ fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)', flexShrink: 0, marginLeft: 4 }}>
+            {node.track_count}
+          </span>
+        )}
+      </div>
+
+      {isExpanded && (
+        <div>
+          {node.children.map(child => (
+            <LibraryTreeNode
+              key={child.id}
+              node={child}
+              depth={depth + 1}
+              selectedId={selectedId}
+              expandedIds={expandedIds}
+              onToggleExpand={onToggleExpand}
+              onSelect={onSelect}
+              tracksByPath={tracksByPath}
+            />
+          ))}
+          {/* Show tracks inline when expanded and it's a leaf or has direct tracks */}
+          {directTracks.map(t => (
+            <div
+              key={t.trackid || t.id}
+              draggable="true"
+              onDragStart={(e) => {
+                const tid = t.trackid || t.id;
+                e.dataTransfer.setData('application/json', JSON.stringify([{ id: tid, title: t.title, artist: t.artist }]));
+                e.dataTransfer.effectAllowed = 'copy';
+              }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '3px 8px 3px ' + (8 + (depth + 1) * 16) + 'px',
+                cursor: 'grab', margin: '0 4px', borderRadius: 4,
+                fontSize: 11, color: '#64748b', fontFamily: 'var(--font-ui)',
+              }}
+            >
+              <span style={{ color: '#475569', display: 'flex' }}><TrackIcon /></span>
+              <span style={{
+                flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {t.artist ? `${t.artist} - ${t.title}` : t.title || 'Unknown'}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -443,8 +642,17 @@ export default function PlaylistOrganiser() {
   const [ingestDragOver, setIngestDragOver] = useState(false);
   const ingestPollRef = useRef(null);
 
+  // Library tree expanded state (separate from playlist folders)
+  const [libExpandedIds, setLibExpandedIds] = useState(new Set());
+
   // ── Build tree from flat list ───────────────────────────────────────────
   const tree = useMemo(() => buildTree(allPlaylists), [allPlaylists]);
+
+  // ── Build file-path tree from tracks ────────────────────────────────────
+  const { roots: fileTreeRoots, tracksByPath } = useMemo(
+    () => buildFileTree(poolTracks),
+    [poolTracks]
+  );
 
   // ── Data fetching ───────────────────────────────────────────────────────
   const fetchTree = useCallback(async () => {
@@ -518,6 +726,41 @@ export default function PlaylistOrganiser() {
       return next;
     });
   }, [folderTracks]);
+
+  // ── Library tree toggle/select ───────────────────────────────────────────
+  const handleLibToggleExpand = useCallback((nodeId) => {
+    setLibExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
+      return next;
+    });
+  }, []);
+
+  const handleLibSelectFolder = useCallback((nodeId, path) => {
+    setSelectedFolderId(nodeId);
+    setSelectedTrackIds(new Set());
+    setLastSelectedIndex(null);
+    // Collect all tracks in this folder + subfolders
+    const tracks = [];
+    const collectTracks = (dirPath) => {
+      if (tracksByPath[dirPath]) tracks.push(...tracksByPath[dirPath]);
+      // Find child paths by checking if they start with dirPath/
+      for (const [p, t] of Object.entries(tracksByPath)) {
+        if (p !== dirPath && p.startsWith(dirPath + '/')) tracks.push(...t);
+      }
+    };
+    collectTracks(path);
+    // Dedupe by trackid
+    const seen = new Set();
+    const unique = tracks.filter(t => {
+      const id = t.trackid || t.id;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    setDisplayTracks(unique);
+  }, [tracksByPath]);
 
   // ── Filter tracks in main area ─────────────────────────────────────────
   const filteredTracks = useMemo(() => {
@@ -727,7 +970,9 @@ export default function PlaylistOrganiser() {
   // Selected folder name for header
   const selectedFolderName = selectedFolderId === 'pool'
     ? 'All Tracks'
-    : allPlaylists.find(p => p.id === selectedFolderId)?.name || 'Folder';
+    : selectedFolderId.startsWith('lib:')
+      ? selectedFolderId.replace('lib:', '').split('/').pop()
+      : allPlaylists.find(p => p.id === selectedFolderId)?.name || 'Folder';
 
   // ── Render ────────────────────────────────────────────────────────────
   return (
@@ -748,16 +993,77 @@ export default function PlaylistOrganiser() {
           {/* Purple accent bar */}
           <div style={{ height: 2, background: 'linear-gradient(90deg, #7c3aed, #00d4ff)' }} />
 
-          {/* Header + New Folder button */}
+          {/* ── LIBRARY section (source folders from filepaths) ──────── */}
           <div style={{
-            padding: '12px 12px 8px',
+            padding: '12px 12px 4px',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           }}>
             <span style={{
               fontSize: 10, fontFamily: 'var(--font-mono)',
               letterSpacing: 2, color: '#64748b', fontWeight: 700,
             }}>
-              FOLDERS
+              LIBRARY
+            </span>
+            <span style={{ fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+              {poolTracks.length}
+            </span>
+          </div>
+
+          {/* All Tracks row */}
+          <div
+            onClick={() => handleSelectFolder('pool')}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 12px', margin: '0 4px', borderRadius: 4,
+              cursor: 'pointer',
+              background: selectedFolderId === 'pool' ? 'rgba(0,212,255,0.08)' : 'transparent',
+              transition: 'background 80ms ease',
+            }}
+          >
+            <span style={{ color: selectedFolderId === 'pool' ? '#00d4ff' : '#475569', display: 'flex' }}>
+              <TrackIcon />
+            </span>
+            <span style={{
+              flex: 1, fontSize: 12, fontWeight: selectedFolderId === 'pool' ? 600 : 500,
+              color: selectedFolderId === 'pool' ? '#e2e8f0' : '#94a3b8',
+              fontFamily: 'var(--font-ui)',
+            }}>
+              All Tracks
+            </span>
+            <span style={{ fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+              {poolTracks.length}
+            </span>
+          </div>
+
+          {/* Library folder tree (from filepaths) */}
+          <div style={{ overflowY: 'auto', padding: '2px 0', maxHeight: '40vh' }}>
+            {fileTreeRoots.map(node => (
+              <LibraryTreeNode
+                key={node.id}
+                node={node}
+                depth={0}
+                selectedId={selectedFolderId}
+                expandedIds={libExpandedIds}
+                onToggleExpand={handleLibToggleExpand}
+                onSelect={handleLibSelectFolder}
+                tracksByPath={tracksByPath}
+              />
+            ))}
+          </div>
+
+          {/* ── Divider between Library and Playlists ──────────────── */}
+          <div style={{ height: 1, background: 'var(--glass-border)', margin: '6px 12px' }} />
+
+          {/* ── PLAYLISTS section (user-created folders) ──────────── */}
+          <div style={{
+            padding: '8px 12px 4px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <span style={{
+              fontSize: 10, fontFamily: 'var(--font-mono)',
+              letterSpacing: 2, color: '#64748b', fontWeight: 700,
+            }}>
+              PLAYLISTS
             </span>
             <m.button
               onClick={() => setShowNewFolderInput(v => !v)}
@@ -824,36 +1130,7 @@ export default function PlaylistOrganiser() {
             )}
           </AnimatePresence>
 
-          {/* All Tracks row */}
-          <div
-            onClick={() => handleSelectFolder('pool')}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '6px 12px', margin: '0 4px', borderRadius: 4,
-              cursor: 'pointer',
-              background: selectedFolderId === 'pool' ? 'rgba(0,212,255,0.08)' : 'transparent',
-              transition: 'background 80ms ease',
-            }}
-          >
-            <span style={{ color: selectedFolderId === 'pool' ? '#00d4ff' : '#475569', display: 'flex' }}>
-              <TrackIcon />
-            </span>
-            <span style={{
-              flex: 1, fontSize: 12, fontWeight: selectedFolderId === 'pool' ? 600 : 500,
-              color: selectedFolderId === 'pool' ? '#e2e8f0' : '#94a3b8',
-              fontFamily: 'var(--font-ui)',
-            }}>
-              All Tracks
-            </span>
-            <span style={{ fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)' }}>
-              {poolTracks.length}
-            </span>
-          </div>
-
-          {/* Divider */}
-          <div style={{ height: 1, background: 'var(--glass-border)', margin: '4px 12px' }} />
-
-          {/* Folder tree (scrollable) */}
+          {/* Playlist folder tree (scrollable) */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
             {loadError && (
               <div style={{
@@ -878,10 +1155,10 @@ export default function PlaylistOrganiser() {
             ))}
             {tree.length === 0 && !loadError && (
               <div style={{
-                padding: '20px 12px', textAlign: 'center',
-                fontSize: 11, color: '#334155', fontFamily: 'var(--font-ui)',
+                padding: '12px 12px', textAlign: 'center',
+                fontSize: 10, color: '#334155', fontFamily: 'var(--font-ui)', fontStyle: 'italic',
               }}>
-                No folders yet. Click "+ New" or use the chat to create folders.
+                No playlists yet -- use chat or + New
               </div>
             )}
           </div>

@@ -26,17 +26,20 @@ COVERS_BASE = f"{SUPABASE_URL}/storage/v1/object/public/album-covers/"
 
 
 def create_safe_filename(artist: str, title: str) -> str:
-    """
-    Mirrors create_safe_filename in upload_album_covers.py.
-    Accented chars are stripped to their ASCII base (é → e, ü → u).
-    Everything non-alphanumeric (except - _) becomes _.
-    Consecutive underscores are collapsed. Max 150 chars.
+    """Build a safe ASCII storage filename from artist + title.
+
+    MUST stay identical to create_safe_filename() in upload_album_covers.py,
+    _make_cover_filename() in ingest_music.py,
+    AND makeSupabaseCoverUrl() in Frontend/src/utils/coverUrl.js.
     """
     raw = f"{artist}_{title}"
-    # Decompose accents then drop the combining characters
+    # 1. NFKD decompose (é → e + combining accent) then drop all non-ASCII
     raw = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii")
+    # 2. Lowercase
     raw = raw.lower()
+    # 3. Replace non-alnum (except - _) with _
     raw = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in raw)
+    # 4. Collapse consecutive underscores, truncate to 150
     raw = "_".join(filter(None, raw.split("_")))
     return raw[:150]
 

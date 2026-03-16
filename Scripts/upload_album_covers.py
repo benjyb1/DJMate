@@ -32,11 +32,20 @@ def save_progress(progress):
         json.dump(progress, f, indent=2)
 
 def create_safe_filename(artist, title):
+    """Build a safe ASCII storage filename from artist + title.
+
+    MUST stay identical to _make_cover_filename() in ingest_music.py,
+    create_safe_filename() in populate_album_art_urls.py,
+    AND makeSupabaseCoverUrl() in Frontend/src/utils/coverUrl.js.
+    """
     safe_name = f"{artist}_{title}"
-    # Strip accents: é → e, ü → u, ñ → n, etc.
+    # 1. NFKD decompose (é → e + combining accent) then drop all non-ASCII
     safe_name = unicodedata.normalize("NFKD", safe_name).encode("ascii", "ignore").decode("ascii")
+    # 2. Lowercase
     safe_name = safe_name.lower()
+    # 3. Replace non-alnum (except - _) with _
     safe_name = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in safe_name)
+    # 4. Collapse consecutive underscores, truncate to 150
     safe_name = '_'.join(filter(None, safe_name.split('_')))
     return safe_name[:150]
 
