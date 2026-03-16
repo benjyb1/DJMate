@@ -53,6 +53,13 @@ const PlusIcon = () => (
   </svg>
 );
 
+const UploadIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+    <path d="M7 10V1M3.5 4.5L7 1l3.5 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+    <path d="M1 11v1.5h12V11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+);
+
 // ── FolderTreeNode (recursive) ──────────────────────────────────────────────
 function FolderTreeNode({
   node, depth, selectedId, expandedIds, onToggleExpand, onSelect,
@@ -428,6 +435,14 @@ export default function PlaylistOrganiser() {
   const [newFolderName, setNewFolderName] = useState('');
   const [loadError, setLoadError] = useState(null);
 
+  // Ingest
+  const [showIngest, setShowIngest] = useState(false);
+  const [ingestFolder, setIngestFolder] = useState('');
+  const [ingestStatus, setIngestStatus] = useState('idle'); // idle | running | done | error
+  const [ingestLog, setIngestLog] = useState([]);
+  const [ingestDragOver, setIngestDragOver] = useState(false);
+  const ingestPollRef = useRef(null);
+
   // ── Build tree from flat list ───────────────────────────────────────────
   const tree = useMemo(() => buildTree(allPlaylists), [allPlaylists]);
 
@@ -625,6 +640,70 @@ export default function PlaylistOrganiser() {
     }
   }, [allPlaylists]);
 
+  // ── Ingest music folder ──────────────────────────────────────────────
+  const startIngest = useCallback(async (folder) => {
+    const path = (folder || ingestFolder).trim();
+    if (!path) return;
+    try {
+      setIngestStatus('running');
+      setIngestLog([]);
+      await apiClient.post('/ingest/start', { folder: path });
+      // Start polling for progress
+      let linesSeen = 0;
+      ingestPollRef.current = setInterval(async () => {
+        try {
+          const data = await apiClient.get(`/ingest/status`, { since: linesSeen });
+          if (data.log_lines?.length) {
+            setIngestLog(prev => [...prev, ...data.log_lines]);
+            linesSeen = data.total_lines;
+          }
+          if (data.status === 'done' || data.status === 'error') {
+            clearInterval(ingestPollRef.current);
+            ingestPollRef.current = null;
+            setIngestStatus(data.status);
+            // Refresh track pool after successful ingest
+            if (data.status === 'done') {
+              apiClient.clearCache();
+              fetchPool();
+              fetchTree();
+            }
+          }
+        } catch {
+          // ignore poll errors
+        }
+      }, 1500);
+    } catch (err) {
+      setIngestStatus('error');
+      setIngestLog(prev => [...prev, `Failed to start: ${err.message}`]);
+    }
+  }, [ingestFolder, fetchPool, fetchTree]);
+
+  // Cleanup poll on unmount
+  useEffect(() => {
+    return () => { if (ingestPollRef.current) clearInterval(ingestPollRef.current); };
+  }, []);
+
+  // Handle folder drop on the ingest zone — extract path from first entry
+  const handleIngestDrop = useCallback((e) => {
+    e.preventDefault();
+    setIngestDragOver(false);
+    // Try to get a folder path from the dropped items
+    const items = e.dataTransfer?.items;
+    if (items?.length) {
+      const entry = items[0].webkitGetAsEntry?.();
+      if (entry?.isDirectory) {
+        // fullPath is available for directory entries (webkit)
+        setIngestFolder(entry.fullPath || entry.name);
+        return;
+      }
+    }
+    // Fallback: check for text/plain (e.g. dragged from Finder address bar)
+    const text = e.dataTransfer?.getData('text/plain')?.trim();
+    if (text) {
+      setIngestFolder(text);
+    }
+  }, []);
+
   // ── Chat submit ───────────────────────────────────────────────────────
   const handleChatSubmit = useCallback(async (query) => {
     if (!query.trim()) return;
@@ -805,6 +884,148 @@ export default function PlaylistOrganiser() {
                 No folders yet. Click "+ New" or use the chat to create folders.
               </div>
             )}
+          </div>
+
+          {/* ── Import Music Folder ────────────────────────────────── */}
+          <div style={{ padding: '8px 12px', borderTop: '1px solid var(--glass-border)' }}>
+            <m.button
+              onClick={() => setShowIngest(v => !v)}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+              style={{
+                width: '100%',
+                padding: '10px 0',
+                background: ingestStatus === 'running'
+                  ? 'linear-gradient(135deg, rgba(0,212,255,0.25), rgba(124,58,237,0.2))'
+                  : 'linear-gradient(135deg, rgba(0,212,255,0.12), rgba(124,58,237,0.08))',
+                border: ingestStatus === 'running'
+                  ? '1px solid rgba(0,212,255,0.5)'
+                  : '1px solid rgba(0,212,255,0.25)',
+                borderRadius: 'var(--radius-sm)',
+                color: '#e2e8f0', fontSize: 12, fontWeight: 700,
+                cursor: 'pointer', fontFamily: 'var(--font-ui)',
+                letterSpacing: '0.05em',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                animation: ingestStatus === 'running' ? 'glowPulse 1.5s ease-in-out infinite' : 'none',
+              }}
+            >
+              <UploadIcon />
+              {ingestStatus === 'running' ? 'Ingesting...' : 'Import Music Folder'}
+            </m.button>
+
+            <AnimatePresence>
+              {showIngest && (
+                <m.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+                  style={{ overflow: 'hidden' }}
+                >
+                  {/* Drop zone + path input */}
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setIngestDragOver(true); }}
+                    onDragLeave={() => setIngestDragOver(false)}
+                    onDrop={handleIngestDrop}
+                    style={{
+                      marginTop: 8, padding: 12,
+                      border: ingestDragOver
+                        ? '2px dashed rgba(0,212,255,0.7)'
+                        : '2px dashed rgba(124,58,237,0.25)',
+                      borderRadius: 'var(--radius-sm)',
+                      background: ingestDragOver ? 'rgba(0,212,255,0.06)' : 'rgba(8,8,20,0.3)',
+                      textAlign: 'center',
+                      transition: 'all 150ms ease',
+                    }}
+                  >
+                    <div style={{
+                      fontSize: 10, color: '#64748b', fontFamily: 'var(--font-ui)',
+                      marginBottom: 8,
+                    }}>
+                      Drop a folder here or paste its path
+                    </div>
+                    <input
+                      value={ingestFolder}
+                      onChange={e => setIngestFolder(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && ingestFolder.trim()) startIngest(); }}
+                      placeholder="/path/to/music/folder"
+                      disabled={ingestStatus === 'running'}
+                      style={{
+                        width: '100%', boxSizing: 'border-box',
+                        padding: '7px 10px',
+                        background: 'rgba(255,255,255,0.06)',
+                        border: '1px solid var(--glass-border)',
+                        borderRadius: 'var(--radius-sm)',
+                        color: '#e2e8f0', fontSize: 11,
+                        fontFamily: 'var(--font-mono)',
+                        outline: 'none',
+                      }}
+                    />
+                    <m.button
+                      onClick={() => startIngest()}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.97 }}
+                      disabled={ingestStatus === 'running' || !ingestFolder.trim()}
+                      style={{
+                        marginTop: 8, width: '100%',
+                        padding: '8px 0',
+                        background: ingestStatus === 'running'
+                          ? 'rgba(100,116,139,0.2)'
+                          : 'rgba(0,212,255,0.15)',
+                        border: '1px solid rgba(0,212,255,0.3)',
+                        borderRadius: 'var(--radius-sm)',
+                        color: ingestStatus === 'running' ? '#475569' : '#00d4ff',
+                        fontSize: 11, fontWeight: 700,
+                        cursor: ingestStatus === 'running' ? 'wait' : 'pointer',
+                        fontFamily: 'var(--font-ui)',
+                        letterSpacing: '0.08em',
+                      }}
+                    >
+                      {ingestStatus === 'running' ? 'INGESTING...' : 'START SCAN'}
+                    </m.button>
+                  </div>
+
+                  {/* Log output */}
+                  {ingestLog.length > 0 && (
+                    <div style={{
+                      marginTop: 8, maxHeight: 120, overflowY: 'auto',
+                      background: 'rgba(8,8,20,0.5)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '6px 8px',
+                      border: '1px solid var(--glass-border)',
+                    }}>
+                      {ingestLog.slice(-20).map((line, i) => (
+                        <div key={i} style={{
+                          fontSize: 9, color: line.includes('ERROR') || line.includes('✗')
+                            ? '#f87171'
+                            : line.includes('✓') || line.includes('✅')
+                              ? '#4ade80'
+                              : '#64748b',
+                          fontFamily: 'var(--font-mono)',
+                          lineHeight: 1.5,
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-all',
+                        }}>
+                          {line}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Status badge */}
+                  {ingestStatus !== 'idle' && ingestStatus !== 'running' && (
+                    <div style={{
+                      marginTop: 6, textAlign: 'center',
+                      fontSize: 10, fontWeight: 700,
+                      fontFamily: 'var(--font-mono)',
+                      color: ingestStatus === 'done' ? '#4ade80' : '#f87171',
+                    }}>
+                      {ingestStatus === 'done' ? 'INGEST COMPLETE' : 'INGEST FAILED'}
+                    </div>
+                  )}
+                </m.div>
+              )}
+            </AnimatePresence>
           </div>
 
           {/* Export button */}

@@ -21,6 +21,7 @@ from backend.chat_router import router as chat_router
 from backend.tag_router import router as tag_router
 from backend.crate_router import router as crate_router
 from backend.playlist_router import router as playlist_router
+from backend.ingest_router import router as ingest_router
 app = FastAPI(title="AI DJ Curation API", version="2.0.0")
 
 # Configure CORS
@@ -35,6 +36,7 @@ app.include_router(chat_router, prefix="/chat", tags=["chat"])
 app.include_router(tag_router, prefix="/tags", tags=["tags"])
 app.include_router(crate_router, prefix="/crates", tags=["crates"])
 app.include_router(playlist_router, prefix="/playlists", tags=["playlists"])
+app.include_router(ingest_router, prefix="/ingest", tags=["ingest"])
 # ── Request models ────────────────────────────────────────────────────────────
 
 class NaturalLanguageQuery(BaseModel):
