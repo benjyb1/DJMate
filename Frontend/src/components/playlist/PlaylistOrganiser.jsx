@@ -227,35 +227,37 @@ export default function PlaylistOrganiser() {
 
     try {
       // Try suggest-tracks endpoint first (preview mode)
-      const data = await apiClient.post('/playlists/suggest-tracks', {
-        query,
-        playlist_id: activePlaylistId || undefined,
-      });
-
-      // Set suggestions for bottom panel
-      setSuggestions({
-        mode: data.mode || 'tracks',
-        name: data.name || null,
-        tracks: data.tracks || [],
-      });
-      setChatFeedback(data.message || `Found ${(data.tracks || []).length} tracks`);
-    } catch (err) {
-      // Fallback to organize endpoint if suggest-tracks doesn't exist yet
-      if (err.status === 404 || err.message?.includes('404')) {
-        try {
-          const data = await apiClient.post('/playlists/organize', { query });
-          setChatFeedback(data.message || 'Done');
-          await fetchTree();
-          // If the LLM created playlists, auto-select the first new one
-          const newTree = await apiClient.get('/playlists/tree');
-          const newList = Array.isArray(newTree) ? newTree : newTree.playlists || [];
-          setAllPlaylists(newList);
-        } catch (fallbackErr) {
-          setChatFeedback(`Error: ${fallbackErr.message}`);
-        }
-      } else {
-        setChatFeedback(`Error: ${err.message}`);
+      let data;
+      let usedSuggest = false;
+      try {
+        data = await apiClient.post('/playlists/suggest-tracks', {
+          query,
+          playlist_id: activePlaylistId || undefined,
+        });
+        usedSuggest = true;
+      } catch (suggestErr) {
+        // Endpoint not deployed yet — fall back to organize (executes immediately)
+        data = await apiClient.post('/playlists/organize', { query });
       }
+
+      if (usedSuggest) {
+        // Set suggestions for bottom panel (preview mode)
+        setSuggestions({
+          mode: data.mode || 'tracks',
+          name: data.name || null,
+          tracks: data.tracks || [],
+        });
+        setChatFeedback(data.message || `Found ${(data.tracks || []).length} tracks`);
+      } else {
+        // Organize executed directly — refresh sidebar
+        setChatFeedback(data.message || 'Done');
+        await fetchTree();
+        const newTree = await apiClient.get('/playlists/tree');
+        const newList = Array.isArray(newTree) ? newTree : newTree.playlists || [];
+        setAllPlaylists(newList);
+      }
+    } catch (err) {
+      setChatFeedback(`Error: ${err.message}`);
     } finally {
       setChatStatus('done');
       setSuggestionsLoading(false);
