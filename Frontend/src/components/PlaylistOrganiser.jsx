@@ -1,406 +1,281 @@
-// src/components/PlaylistOrganiser.jsx — Folder-based track organiser (card grid layout)
+// src/components/PlaylistOrganiser.jsx — Finder-style folder tree + track browser
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { LazyMotion, domAnimation, m, AnimatePresence } from 'framer-motion';
 import { apiClient } from '../api/apiClient';
-import { supabase } from '../utils/supabaseClient';
 import GlassPanel from './ui/GlassPanel';
 import { makeSupabaseCoverUrl } from '../utils/coverUrl';
 
-// ── Build folder tree from filepaths ─────────────────────────────────────────
-function buildFolderTree(tracks) {
-  const root = { name: 'Music', children: {}, tracks: [], path: '' };
-
-  // Find the common prefix across all filepaths
-  const paths = tracks.map(t => t.filepath).filter(Boolean);
-  if (paths.length === 0) return root;
-
-  const parts = paths.map(p => p.split('/').filter(Boolean));
-  let commonDepth = 0;
-  if (parts.length > 0) {
-    const first = parts[0];
-    outer:
-    for (let i = 0; i < first.length; i++) {
-      for (let j = 1; j < parts.length; j++) {
-        if (!parts[j][i] || parts[j][i] !== first[i]) break outer;
-      }
-      commonDepth = i + 1;
+// ── helpers ─────────────────────────────────────────────────────────────────
+function buildTree(flatList) {
+  const map = {};
+  const roots = [];
+  for (const item of flatList) {
+    map[item.id] = { ...item, children: [] };
+  }
+  for (const item of flatList) {
+    if (item.parent_id && map[item.parent_id]) {
+      map[item.parent_id].children.push(map[item.id]);
+    } else {
+      roots.push(map[item.id]);
     }
   }
+  return roots;
+}
 
-  for (const track of tracks) {
-    if (!track.filepath) continue;
-    const segments = track.filepath.split('/').filter(Boolean).slice(commonDepth);
-    const folderSegments = segments.slice(0, -1); // everything except filename
-    let node = root;
-    let currentPath = '';
-    for (const seg of folderSegments) {
-      currentPath += '/' + seg;
-      if (!node.children[seg]) {
-        node.children[seg] = { name: seg, children: {}, tracks: [], path: currentPath };
-      }
-      node = node.children[seg];
+// ── SVG icons ───────────────────────────────────────────────────────────────
+const ChevronIcon = ({ open }) => (
+  <svg width="10" height="10" viewBox="0 0 10 10" fill="none"
+    style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 120ms ease', flexShrink: 0 }}>
+    <path d="M3 1.5l4 3.5-4 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+);
+
+const FolderIcon = ({ open, size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+    {open
+      ? <path d="M1.5 12.5V4c0-.6.4-1 1-1H6l1.5 1.5H13c.6 0 1 .4 1 1v1H4.5l-3 6V4z" stroke="currentColor" strokeWidth="1.1" fill="rgba(124,58,237,0.15)"/>
+      : <path d="M2 4c0-.6.4-1 1-1h3.6l1.4 1.5H13c.6 0 1 .4 1 1V12c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V4z" stroke="currentColor" strokeWidth="1.1"/>
     }
-    node.tracks.push(track);
-  }
+  </svg>
+);
 
-  return root;
-}
+const TrackIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+    <path d="M6 12V3l7-2v9" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/>
+    <circle cx="4" cy="12" r="2" stroke="currentColor" strokeWidth="1.1"/>
+    <circle cx="11" cy="10" r="2" stroke="currentColor" strokeWidth="1.1"/>
+  </svg>
+);
 
-function countTreeTracks(node) {
-  let count = node.tracks.length;
-  for (const child of Object.values(node.children)) {
-    count += countTreeTracks(child);
-  }
-  return count;
-}
+const PlusIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+    <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+  </svg>
+);
 
-function collectTreeTracks(node) {
-  let result = [...node.tracks];
-  for (const child of Object.values(node.children)) {
-    result = result.concat(collectTreeTracks(child));
-  }
-  return result;
-}
+// ── FolderTreeNode (recursive) ──────────────────────────────────────────────
+function FolderTreeNode({
+  node, depth, selectedId, expandedIds, onToggleExpand, onSelect,
+  onDrop, folderTracks,
+}) {
+  const [dragOver, setDragOver] = useState(false);
+  const isExpanded = expandedIds.has(node.id);
+  const isSelected = selectedId === node.id;
+  const hasChildren = node.children && node.children.length > 0;
+  const tracks = folderTracks[node.id] || [];
 
-// ── FolderTreeNode ───────────────────────────────────────────────────────────
-function FolderTreeNode({ node, depth, selectedPath, onSelect }) {
-  const [expanded, setExpanded] = useState(depth < 1);
-  const childKeys = Object.keys(node.children).sort((a, b) => a.localeCompare(b));
-  const hasChildren = childKeys.length > 0;
-  const trackCount = countTreeTracks(node);
-  const isSelected = selectedPath === node.path;
+  const handleDragOver = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); };
+  const handleDragLeave = (e) => { e.stopPropagation(); setDragOver(false); };
+  const handleDrop = (e) => { e.stopPropagation(); setDragOver(false); onDrop(node.id, e); };
 
   return (
     <div>
-      <m.div
-        onClick={() => {
-          if (hasChildren) setExpanded(v => !v);
-          onSelect(node);
-        }}
-        whileHover={{ scale: 1.01 }}
-        whileTap={{ scale: 0.98 }}
+      {/* Folder row */}
+      <div
+        onClick={() => { onToggleExpand(node.id); onSelect(node.id); }}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          padding: '5px 8px', margin: '1px 0',
-          paddingLeft: 8 + depth * 14,
-          borderRadius: 'var(--radius-sm)',
+          display: 'flex', alignItems: 'center', gap: 4,
+          padding: '4px 8px 4px ' + (8 + depth * 16) + 'px',
           cursor: 'pointer',
-          background: isSelected ? 'rgba(0,212,255,0.08)' : 'transparent',
-          border: isSelected ? '1px solid rgba(0,212,255,0.25)' : '1px solid transparent',
-          transition: 'background 120ms ease, border-color 120ms ease',
+          background: dragOver
+            ? 'rgba(0,212,255,0.12)'
+            : isSelected
+              ? 'rgba(124,58,237,0.1)'
+              : 'transparent',
+          border: dragOver ? '1px solid rgba(0,212,255,0.4)' : '1px solid transparent',
+          borderRadius: 4,
+          margin: '0 4px',
+          transition: 'background 80ms ease, border-color 80ms ease',
+          minHeight: 26,
         }}
       >
-        {/* Expand/collapse chevron */}
-        {hasChildren ? (
-          <span style={{
-            color: '#475569', display: 'flex', flexShrink: 0,
-            transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
-            transition: 'transform 150ms ease',
-          }}>
-            <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-              <path d="M4 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </span>
-        ) : (
-          <span style={{ width: 10, flexShrink: 0 }} />
-        )}
-
-        {/* Folder icon */}
-        <span style={{ color: isSelected ? '#a855f7' : '#475569', display: 'flex', flexShrink: 0 }}>
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-            <path d="M2 4c0-.6.4-1 1-1h3.6l1.4 1.5H13c.6 0 1 .4 1 1V12c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V4z"
-              stroke="currentColor" strokeWidth="1.2"
-              fill={isSelected ? 'rgba(168,85,247,0.15)' : 'none'}
-            />
-          </svg>
+        <span style={{ color: '#64748b', display: 'flex', width: 10 }}>
+          {(hasChildren || tracks.length > 0 || node.track_count > 0) && <ChevronIcon open={isExpanded} />}
         </span>
-
-        {/* Folder name */}
+        <span style={{ color: isSelected ? '#a855f7' : '#64748b', display: 'flex' }}>
+          <FolderIcon open={isExpanded} />
+        </span>
         <span style={{
-          flex: 1, minWidth: 0, fontSize: 11, fontWeight: 600,
+          flex: 1, minWidth: 0, fontSize: 12, fontWeight: isSelected ? 600 : 500,
           color: isSelected ? '#e2e8f0' : '#94a3b8',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           fontFamily: 'var(--font-ui)',
         }}>
           {node.name}
         </span>
+        {(node.track_count > 0 || node.children?.length > 0) && (
+          <span style={{
+            fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)',
+            flexShrink: 0, marginLeft: 4,
+          }}>
+            {node.track_count ?? 0}
+          </span>
+        )}
+      </div>
 
-        {/* Track count */}
-        <span style={{
-          fontSize: 9, color: '#475569', flexShrink: 0,
-          fontFamily: 'var(--font-mono)',
-        }}>
-          {trackCount}
-        </span>
-      </m.div>
-
-      {/* Children */}
-      {hasChildren && expanded && (
+      {/* Children (sub-folders + tracks) */}
+      {isExpanded && (
         <div>
-          {childKeys.map(key => (
+          {node.children.map(child => (
             <FolderTreeNode
-              key={node.children[key].path}
-              node={node.children[key]}
+              key={child.id}
+              node={child}
               depth={depth + 1}
-              selectedPath={selectedPath}
+              selectedId={selectedId}
+              expandedIds={expandedIds}
+              onToggleExpand={onToggleExpand}
               onSelect={onSelect}
+              onDrop={onDrop}
+              folderTracks={folderTracks}
             />
           ))}
+          {/* Inline tracks (lazy-loaded) */}
+          {tracks.map(t => (
+            <div
+              key={t.trackid || t.id}
+              draggable="true"
+              onDragStart={(e) => {
+                const tid = t.trackid || t.id;
+                e.dataTransfer.setData('application/json', JSON.stringify([{ id: tid, title: t.title, artist: t.artist }]));
+                e.dataTransfer.effectAllowed = 'copy';
+              }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '3px 8px 3px ' + (8 + (depth + 1) * 16) + 'px',
+                cursor: 'grab', margin: '0 4px', borderRadius: 4,
+                fontSize: 11, color: '#64748b', fontFamily: 'var(--font-ui)',
+              }}
+            >
+              <span style={{ color: '#475569', display: 'flex' }}><TrackIcon /></span>
+              <span style={{
+                flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {t.artist ? `${t.artist} - ${t.title}` : t.title || 'Unknown'}
+              </span>
+            </div>
+          ))}
+          {isExpanded && !hasChildren && tracks.length === 0 && node.track_count === 0 && (
+            <div style={{
+              padding: '4px 8px 4px ' + (8 + (depth + 1) * 16) + 'px',
+              fontSize: 10, color: '#334155', fontFamily: 'var(--font-mono)', fontStyle: 'italic',
+            }}>
+              Empty -- drag tracks here
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-// ── WorkspaceFolder ──────────────────────────────────────────────────────────
-function WorkspaceFolder({ folder, isExpanded, onToggle, onDelete, onDrop, onDragOver, trackCount }) {
-  const [dragOver, setDragOver] = useState(false);
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setDragOver(true);
-    onDragOver?.(e);
-  };
-  const handleDragLeave = () => setDragOver(false);
-  const handleDrop = (e) => {
-    setDragOver(false);
-    onDrop(e);
-  };
-
-  return (
-    <m.div
-      initial={{ opacity: 0, scale: 0.9 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.9 }}
-      transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      onClick={onToggle}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '5px 10px 5px 12px',
-        borderRadius: 'var(--radius-pill)',
-        cursor: 'pointer',
-        background: dragOver
-          ? 'rgba(0,212,255,0.12)'
-          : isExpanded
-            ? 'rgba(124,58,237,0.12)'
-            : 'rgba(255,255,255,0.04)',
-        border: dragOver
-          ? '1px solid rgba(0,212,255,0.5)'
-          : isExpanded
-            ? '1px solid rgba(124,58,237,0.3)'
-            : '1px solid var(--glass-border)',
-        boxShadow: dragOver ? '0 0 12px rgba(0,212,255,0.2)' : 'none',
-        transition: 'background 120ms ease, border-color 120ms ease, box-shadow 120ms ease',
-      }}
-    >
-      <span style={{ color: isExpanded ? '#a855f7' : '#94a3b8', display: 'flex', flexShrink: 0 }}>
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2 4c0-.6.4-1 1-1h3.6l1.4 1.5H13c.6 0 1 .4 1 1V12c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V4z" stroke="currentColor" strokeWidth="1.2"/></svg>
-      </span>
-      <span style={{
-        fontSize: 11, fontWeight: 600, color: '#e2e8f0',
-        whiteSpace: 'nowrap', fontFamily: 'var(--font-ui)',
-      }}>
-        {folder.name}
-      </span>
-      <span style={{
-        fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)',
-        background: 'rgba(255,255,255,0.06)', borderRadius: 'var(--radius-pill)',
-        padding: '1px 6px', minWidth: 18, textAlign: 'center',
-      }}>
-        {trackCount}
-      </span>
-      <m.button
-        whileHover={{ scale: 1.15 }}
-        whileTap={{ scale: 0.9 }}
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        aria-label="Delete folder"
-        style={{
-          background: 'none', border: 'none', color: '#475569',
-          cursor: 'pointer', padding: 2, display: 'flex',
-          alignItems: 'center', justifyContent: 'center',
-          marginLeft: 2,
-        }}
-      >
-        <svg width="10" height="10" viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-      </m.button>
-    </m.div>
-  );
-}
-
-// ── TrackCard ────────────────────────────────────────────────────────────────
-function TrackCard({ track, isSelected, isPlaying, onSelect, onPlay, onDragStart }) {
+// ── TrackRow (main area — compact list row, draggable) ──────────────────────
+function TrackRow({ track, isSelected, isPlaying, onSelect, onPlay, onDragStart }) {
   const [artError, setArtError] = useState(false);
   const artUrl = makeSupabaseCoverUrl(track.artist, track.title);
 
-  const gradientFallback = (
-    <div style={{
-      width: '100%', aspectRatio: '1', borderRadius: 'var(--radius-sm)',
-      background: 'linear-gradient(135deg, rgba(124,58,237,0.3), rgba(0,212,255,0.2))',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontSize: 28, color: 'rgba(255,255,255,0.3)', fontFamily: 'var(--font-ui)',
-    }}>
-      {(track.title || '?')[0].toUpperCase()}
-    </div>
-  );
-
   return (
-    <m.div
+    <div
       draggable="true"
-      onDragStart={(e) => {
-        const tid = track.trackid || track.id;
-        onDragStart(e, tid);
-      }}
+      onDragStart={(e) => onDragStart(e, track.trackid || track.id)}
       onClick={onSelect}
-      whileHover={{ y: -2 }}
       style={{
-        width: '100%',
-        background: 'rgba(255,255,255,0.03)',
-        border: isSelected
-          ? '1px solid rgba(124,58,237,0.5)'
-          : '1px solid rgba(255,255,255,0.04)',
-        borderRadius: 'var(--radius-md)',
-        padding: 8,
-        cursor: 'pointer',
-        boxShadow: isSelected
-          ? '0 0 0 2px #7c3aed, 0 0 12px rgba(124,58,237,0.3)'
-          : 'var(--shadow-card)',
-        transition: 'border-color 120ms ease, box-shadow 120ms ease',
-        display: 'flex', flexDirection: 'column', gap: 6,
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '6px 12px',
+        background: isSelected ? 'rgba(124,58,237,0.08)' : 'transparent',
+        border: isSelected ? '1px solid rgba(124,58,237,0.3)' : '1px solid transparent',
+        borderRadius: 'var(--radius-sm)',
+        cursor: 'grab',
+        transition: 'background 80ms ease',
       }}
     >
-      {/* Album art */}
-      {artError || !artUrl ? gradientFallback : (
-        <img
-          src={artUrl}
-          alt=""
-          onError={() => setArtError(true)}
-          loading="lazy"
-          style={{
-            width: '100%', aspectRatio: '1', objectFit: 'cover',
-            borderRadius: 'var(--radius-sm)', display: 'block',
-          }}
-        />
-      )}
-
-      {/* Title */}
-      <div style={{
-        fontSize: 13, fontWeight: 600, color: '#e2e8f0',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        fontFamily: 'var(--font-ui)', lineHeight: 1.3,
-      }}>
-        {track.title || 'Unknown'}
-      </div>
-
-      {/* Artist */}
-      <div style={{
-        fontSize: 11, color: '#94a3b8',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        fontFamily: 'var(--font-ui)', lineHeight: 1.2, marginTop: -2,
-      }}>
-        {track.artist || 'Unknown'}
-      </div>
-
-      {/* Bottom row: play + BPM + Key */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 6, marginTop: 'auto',
-      }}>
-        {/* Play/Pause button */}
-        <m.button
-          whileHover={{ scale: 1.1 }}
-          whileTap={{ scale: 0.9 }}
-          onClick={(e) => { e.stopPropagation(); onPlay(); }}
-          style={{
-            background: 'rgba(124,58,237,0.12)', border: 'none',
-            borderRadius: 'var(--radius-pill)', width: 24, height: 24,
+      {/* Album art thumbnail */}
+      <div style={{ width: 32, height: 32, flexShrink: 0, borderRadius: 4, overflow: 'hidden' }}>
+        {artError || !artUrl ? (
+          <div style={{
+            width: 32, height: 32, borderRadius: 4,
+            background: 'linear-gradient(135deg, rgba(124,58,237,0.3), rgba(0,212,255,0.2))',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer', color: isPlaying ? '#00d4ff' : '#a855f7',
-            flexShrink: 0,
-            animation: isPlaying ? 'glowPulse 1.5s ease-in-out infinite' : 'none',
-          }}
-        >
-          {isPlaying ? (
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="3" y="2" width="2.5" height="10" rx="0.5" fill="currentColor"/><rect x="8.5" y="2" width="2.5" height="10" rx="0.5" fill="currentColor"/></svg>
-          ) : (
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 2l9 5-9 5V2z" fill="currentColor"/></svg>
-          )}
-        </m.button>
-
-        {/* BPM pill */}
-        {track.bpm && (
-          <span style={{
-            fontSize: 10, color: '#00d4ff', fontFamily: 'var(--font-mono)',
-            background: 'rgba(0,212,255,0.08)', borderRadius: 'var(--radius-pill)',
-            padding: '2px 6px',
+            fontSize: 14, color: 'rgba(255,255,255,0.3)', fontFamily: 'var(--font-ui)',
           }}>
-            {Math.round(track.bpm)}
-          </span>
-        )}
-
-        {/* Key pill */}
-        {track.key && (
-          <span style={{
-            fontSize: 10, color: '#a855f7', fontFamily: 'var(--font-mono)',
-            background: 'rgba(124,58,237,0.08)', borderRadius: 'var(--radius-pill)',
-            padding: '2px 6px', marginLeft: 'auto',
-          }}>
-            {track.key}
-          </span>
+            {(track.title || '?')[0].toUpperCase()}
+          </div>
+        ) : (
+          <img src={artUrl} alt="" onError={() => setArtError(true)} loading="lazy"
+            style={{ width: 32, height: 32, objectFit: 'cover', display: 'block' }} />
         )}
       </div>
-    </m.div>
-  );
-}
 
-// ── ExpandedFolderTracks ─────────────────────────────────────────────────────
-function ExpandedFolderTracks({ folderId }) {
-  const [tracks, setTracks] = useState([]);
+      {/* Title + Artist */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{
+          fontSize: 12, fontWeight: 600, color: '#e2e8f0',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          fontFamily: 'var(--font-ui)', lineHeight: 1.3,
+        }}>
+          {track.title || 'Unknown'}
+        </div>
+        <div style={{
+          fontSize: 10, color: '#64748b',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          fontFamily: 'var(--font-ui)', lineHeight: 1.2,
+        }}>
+          {track.artist || 'Unknown'}
+        </div>
+      </div>
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const data = await apiClient.get(`/playlists/${folderId}`);
-        setTracks(data.tracks || []);
-      } catch (err) {
-        console.error(err);
-      }
-    })();
-  }, [folderId]);
-
-  return (
-    <div style={{
-      padding: '8px 20px', display: 'flex', gap: 8,
-      overflowX: 'auto', background: 'rgba(124,58,237,0.05)',
-    }}>
-      {tracks.length === 0 && (
-        <span style={{ color: '#475569', fontSize: 12, fontFamily: 'var(--font-ui)' }}>
-          Empty folder -- drag tracks here
+      {/* BPM */}
+      {track.bpm && (
+        <span style={{
+          fontSize: 10, color: '#00d4ff', fontFamily: 'var(--font-mono)',
+          background: 'rgba(0,212,255,0.08)', borderRadius: 'var(--radius-pill)',
+          padding: '2px 6px', flexShrink: 0,
+        }}>
+          {Math.round(track.bpm)}
         </span>
       )}
-      {tracks.map(t => (
-        <div key={t.trackid || t.id} style={{
-          padding: '4px 10px', background: 'rgba(255,255,255,0.04)',
-          borderRadius: 'var(--radius-pill)',
-          fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap',
-          fontFamily: 'var(--font-mono)',
+
+      {/* Key */}
+      {track.key && (
+        <span style={{
+          fontSize: 10, color: '#a855f7', fontFamily: 'var(--font-mono)',
+          background: 'rgba(124,58,237,0.08)', borderRadius: 'var(--radius-pill)',
+          padding: '2px 6px', flexShrink: 0,
         }}>
-          {t.title} -- {t.artist}
-        </div>
-      ))}
+          {track.key}
+        </span>
+      )}
+
+      {/* Play button */}
+      <m.button
+        whileHover={{ scale: 1.1 }}
+        whileTap={{ scale: 0.9 }}
+        onClick={(e) => { e.stopPropagation(); onPlay(); }}
+        style={{
+          background: 'rgba(124,58,237,0.12)', border: 'none',
+          borderRadius: 'var(--radius-pill)', width: 24, height: 24,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer', color: isPlaying ? '#00d4ff' : '#a855f7',
+          flexShrink: 0,
+          animation: isPlaying ? 'glowPulse 1.5s ease-in-out infinite' : 'none',
+        }}
+      >
+        {isPlaying ? (
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><rect x="3" y="2" width="2.5" height="10" rx="0.5" fill="currentColor"/><rect x="8.5" y="2" width="2.5" height="10" rx="0.5" fill="currentColor"/></svg>
+        ) : (
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 2l9 5-9 5V2z" fill="currentColor"/></svg>
+        )}
+      </m.button>
     </div>
   );
 }
 
 // ── PlaylistChat ─────────────────────────────────────────────────────────────
-function PlaylistChat({
-  chatQuery, setChatQuery, chatStatus, chatFeedback,
-  suggestedTracks, onSubmit, onPlayTrack, playingTrackId,
-  workspaceFolders, onAddToFolder,
-}) {
+function PlaylistChat({ chatQuery, setChatQuery, chatStatus, chatFeedback, onSubmit }) {
   const [expanded, setExpanded] = useState(true);
-  const quickPrompts = ['ORGANIZE ALL', 'SUGGEST TRACKS', 'MOVE TRACKS'];
+  const quickPrompts = ['ORGANIZE ALL', 'SUGGEST TRACKS', 'CREATE 3 SET FOLDERS'];
 
   return (
     <div style={{
@@ -408,7 +283,6 @@ function PlaylistChat({
       padding: expanded ? '14px 20px 16px' : '10px 20px',
       flexShrink: 0,
     }}>
-      {/* Toggle */}
       <div
         onClick={() => setExpanded(v => !v)}
         style={{
@@ -470,7 +344,7 @@ function PlaylistChat({
                 value={chatQuery}
                 onChange={e => setChatQuery(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && chatQuery.trim()) onSubmit(chatQuery); }}
-                placeholder="e.g. Sort intro tracks by BPM ascending..."
+                placeholder="e.g. Make 3 folders: Intro, Peak, Cooldown..."
                 style={{
                   flex: 1, padding: '9px 14px',
                   background: 'rgba(8,8,20,0.5)',
@@ -513,26 +387,6 @@ function PlaylistChat({
                 {chatStatus === 'thinking' ? 'Thinking...' : chatFeedback}
               </m.div>
             )}
-
-            {/* Suggested tracks horizontal scroll */}
-            {suggestedTracks && suggestedTracks.length > 0 && (
-              <div style={{
-                marginTop: 10, display: 'flex', gap: 8,
-                overflowX: 'auto', paddingBottom: 4,
-              }}>
-                {suggestedTracks.map(track => {
-                  const tid = track.trackid || track.id;
-                  return (
-                    <MiniTrackCard
-                      key={tid}
-                      track={track}
-                      isPlaying={playingTrackId === tid}
-                      onPlay={() => onPlayTrack(track)}
-                    />
-                  );
-                })}
-              </div>
-            )}
           </m.div>
         )}
       </AnimatePresence>
@@ -540,81 +394,20 @@ function PlaylistChat({
   );
 }
 
-// ── MiniTrackCard (for suggested tracks in chat) ─────────────────────────────
-function MiniTrackCard({ track, isPlaying, onPlay }) {
-  const [artError, setArtError] = useState(false);
-  const artUrl = makeSupabaseCoverUrl(track.artist, track.title);
-
-  return (
-    <div style={{
-      minWidth: 100, maxWidth: 100, flexShrink: 0,
-      background: 'rgba(255,255,255,0.03)',
-      border: '1px solid rgba(255,255,255,0.04)',
-      borderRadius: 'var(--radius-sm)',
-      padding: 6, cursor: 'pointer',
-    }}>
-      {artError || !artUrl ? (
-        <div style={{
-          width: '100%', aspectRatio: '1', borderRadius: 4,
-          background: 'linear-gradient(135deg, rgba(124,58,237,0.3), rgba(0,212,255,0.2))',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 18, color: 'rgba(255,255,255,0.3)', fontFamily: 'var(--font-ui)',
-        }}>
-          {(track.title || '?')[0].toUpperCase()}
-        </div>
-      ) : (
-        <img
-          src={artUrl} alt=""
-          onError={() => setArtError(true)}
-          style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 4, display: 'block' }}
-        />
-      )}
-      <div style={{
-        fontSize: 10, fontWeight: 600, color: '#e2e8f0', marginTop: 4,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        fontFamily: 'var(--font-ui)',
-      }}>
-        {track.title || 'Unknown'}
-      </div>
-      <div style={{
-        fontSize: 9, color: '#94a3b8', marginTop: 1,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        fontFamily: 'var(--font-ui)',
-      }}>
-        {track.artist || 'Unknown'}
-      </div>
-      <m.button
-        whileHover={{ scale: 1.1 }}
-        whileTap={{ scale: 0.9 }}
-        onClick={onPlay}
-        style={{
-          marginTop: 4, background: 'rgba(124,58,237,0.12)', border: 'none',
-          borderRadius: 'var(--radius-pill)', width: 20, height: 20,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          cursor: 'pointer', color: isPlaying ? '#00d4ff' : '#a855f7',
-        }}
-      >
-        {isPlaying ? (
-          <svg width="10" height="10" viewBox="0 0 14 14" fill="none"><rect x="3" y="2" width="2.5" height="10" rx="0.5" fill="currentColor"/><rect x="8.5" y="2" width="2.5" height="10" rx="0.5" fill="currentColor"/></svg>
-        ) : (
-          <svg width="10" height="10" viewBox="0 0 14 14" fill="none"><path d="M3 2l9 5-9 5V2z" fill="currentColor"/></svg>
-        )}
-      </m.button>
-    </div>
-  );
-}
-
 // ── Main Component ───────────────────────────────────────────────────────────
 export default function PlaylistOrganiser() {
-  // Library (source) — folder tree from Supabase filepaths
-  const [folderTree, setFolderTree] = useState(null);
-  const [allTracks, setAllTracks] = useState([]);
-  const [selectedFolderPath, setSelectedFolderPath] = useState('');
-  const [sourceTracks, setSourceTracks] = useState([]);
-
-  // Workspace (destination)
-  const [workspaceFolders, setWorkspaceFolders] = useState([]);
-  const [expandedFolderId, setExpandedFolderId] = useState(null);
+  // All playlists from DB (flat)
+  const [allPlaylists, setAllPlaylists] = useState([]);
+  // Track pool (all tracks)
+  const [poolTracks, setPoolTracks] = useState([]);
+  // Currently selected folder (shows its tracks in main area)
+  const [selectedFolderId, setSelectedFolderId] = useState('pool');
+  // Tracks displayed in main area
+  const [displayTracks, setDisplayTracks] = useState([]);
+  // Expanded folder IDs in sidebar
+  const [expandedIds, setExpandedIds] = useState(new Set());
+  // Lazy-loaded folder tracks (for inline sidebar display)
+  const [folderTracks, setFolderTracks] = useState({});
 
   // Selection & drag
   const [selectedTrackIds, setSelectedTrackIds] = useState(new Set());
@@ -628,7 +421,6 @@ export default function PlaylistOrganiser() {
   const [chatQuery, setChatQuery] = useState('');
   const [chatStatus, setChatStatus] = useState('idle');
   const [chatFeedback, setChatFeedback] = useState('');
-  const [suggestedTracks, setSuggestedTracks] = useState([]);
 
   // UI
   const [searchFilter, setSearchFilter] = useState('');
@@ -636,74 +428,102 @@ export default function PlaylistOrganiser() {
   const [newFolderName, setNewFolderName] = useState('');
   const [loadError, setLoadError] = useState(null);
 
-  // ── Data fetching — build folder tree from Supabase filepaths ─────────────
-  const fetchTracks = useCallback(async () => {
+  // ── Build tree from flat list ───────────────────────────────────────────
+  const tree = useMemo(() => buildTree(allPlaylists), [allPlaylists]);
+
+  // ── Data fetching ───────────────────────────────────────────────────────
+  const fetchTree = useCallback(async () => {
     try {
-      const { data, error: err } = await supabase
-        .from('tracks')
-        .select('trackid,title,artist,bpm,key,audio_url,filepath,album_art_url');
-      if (err) throw err;
-      const tracks = data || [];
-      setAllTracks(tracks);
-      setSourceTracks(tracks);
-      const tree = buildFolderTree(tracks);
-      setFolderTree(tree);
+      const data = await apiClient.get('/playlists/tree');
+      const list = Array.isArray(data) ? data : data.playlists || [];
+      setAllPlaylists(list);
       setLoadError(null);
     } catch (err) {
       setLoadError(err.message);
     }
   }, []);
 
-  useEffect(() => {
-    fetchTracks();
-  }, [fetchTracks]);
+  const fetchPool = useCallback(async () => {
+    try {
+      const data = await apiClient.get('/playlists/pool');
+      const tracks = Array.isArray(data) ? data : data.tracks || [];
+      setPoolTracks(tracks);
+      if (selectedFolderId === 'pool') setDisplayTracks(tracks);
+    } catch (err) {
+      console.error('Failed to fetch pool:', err);
+    }
+  }, [selectedFolderId]);
+
+  useEffect(() => { fetchTree(); fetchPool(); }, [fetchTree, fetchPool]);
 
   // Audio cleanup
   useEffect(() => {
     const audio = audioRef.current;
     const handleEnded = () => setPlayingTrackId(null);
     audio.addEventListener('ended', handleEnded);
-    return () => {
-      audio.pause();
-      audio.removeEventListener('ended', handleEnded);
-    };
+    return () => { audio.pause(); audio.removeEventListener('ended', handleEnded); };
   }, []);
 
-  // ── Folder selection — show tracks from selected folder ──────────────────
-  const handleSelectFolder = useCallback((node) => {
-    setSelectedFolderPath(node.path);
+  // ── Folder selection (loads tracks into main area) ──────────────────────
+  const handleSelectFolder = useCallback(async (folderId) => {
+    setSelectedFolderId(folderId);
     setSelectedTrackIds(new Set());
     setLastSelectedIndex(null);
-    if (node.path === '') {
-      // Root = all tracks
-      setSourceTracks(allTracks);
+    if (folderId === 'pool') {
+      setDisplayTracks(poolTracks);
     } else {
-      setSourceTracks(collectTreeTracks(node));
+      try {
+        const data = await apiClient.get(`/playlists/${folderId}`);
+        const tracks = data.tracks || [];
+        setDisplayTracks(tracks);
+        // Cache for sidebar inline display
+        setFolderTracks(prev => ({ ...prev, [folderId]: tracks }));
+      } catch (err) {
+        console.error(err);
+        setDisplayTracks([]);
+      }
     }
-  }, [allTracks]);
+  }, [poolTracks]);
 
-  // ── Filter tracks ──────────────────────────────────────────────────────────
-  const getDisplayedTracks = useCallback(() => {
-    if (!searchFilter) return sourceTracks;
+  // ── Expand/collapse toggle (lazy-loads tracks) ─────────────────────────
+  const handleToggleExpand = useCallback(async (folderId) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(folderId)) {
+        next.delete(folderId);
+      } else {
+        next.add(folderId);
+        // Lazy-load tracks if not cached
+        if (!folderTracks[folderId]) {
+          apiClient.get(`/playlists/${folderId}`).then(data => {
+            setFolderTracks(p => ({ ...p, [folderId]: data.tracks || [] }));
+          }).catch(() => {});
+        }
+      }
+      return next;
+    });
+  }, [folderTracks]);
+
+  // ── Filter tracks in main area ─────────────────────────────────────────
+  const filteredTracks = useMemo(() => {
+    if (!searchFilter) return displayTracks;
     const q = searchFilter.toLowerCase();
-    return sourceTracks.filter(t =>
+    return displayTracks.filter(t =>
       (t.title || '').toLowerCase().includes(q) ||
       (t.artist || '').toLowerCase().includes(q)
     );
-  }, [sourceTracks, searchFilter]);
+  }, [displayTracks, searchFilter]);
 
-  const displayedTracks = useMemo(() => getDisplayedTracks(), [getDisplayedTracks]);
-
-  // ── Multi-select ───────────────────────────────────────────────────────────
+  // ── Multi-select ───────────────────────────────────────────────────────
   const handleTrackSelect = useCallback((trackId, index, event) => {
     setSelectedTrackIds(prev => {
       const next = new Set(prev);
       if (event.shiftKey && lastSelectedIndex !== null) {
         const start = Math.min(lastSelectedIndex, index);
         const end = Math.max(lastSelectedIndex, index);
-        const displayed = getDisplayedTracks();
         for (let i = start; i <= end; i++) {
-          next.add(displayed[i].trackid || displayed[i].id);
+          const t = filteredTracks[i];
+          if (t) next.add(t.trackid || t.id);
         }
       } else if (event.metaKey || event.ctrlKey) {
         if (next.has(trackId)) next.delete(trackId);
@@ -715,87 +535,69 @@ export default function PlaylistOrganiser() {
       return next;
     });
     setLastSelectedIndex(index);
-  }, [lastSelectedIndex, getDisplayedTracks]);
+  }, [lastSelectedIndex, filteredTracks]);
 
-  // ── Drag ───────────────────────────────────────────────────────────────────
+  // ── Drag start (from main area tracks) ─────────────────────────────────
   const handleDragStart = useCallback((e, trackId) => {
-    let dragIds = selectedTrackIds.has(trackId)
-      ? [...selectedTrackIds]
-      : [trackId];
-
+    const dragIds = selectedTrackIds.has(trackId) ? [...selectedTrackIds] : [trackId];
+    const allTracks = [...displayTracks, ...poolTracks];
     const dragData = dragIds.map(id => {
-      const track = sourceTracks.find(t => (t.trackid || t.id) === id);
+      const track = allTracks.find(t => (t.trackid || t.id) === id);
       return { id, title: track?.title, artist: track?.artist };
     });
-
     e.dataTransfer.setData('application/json', JSON.stringify(dragData));
     e.dataTransfer.effectAllowed = 'copy';
-  }, [selectedTrackIds, sourceTracks]);
+  }, [selectedTrackIds, displayTracks, poolTracks]);
 
-  // ── Workspace folder operations ────────────────────────────────────────────
-  const refreshWorkspaceFolders = useCallback(async () => {
-    try {
-      const data = await apiClient.get('/playlists/tree');
-      const all = Array.isArray(data) ? data : data.playlists || [];
-      setWorkspaceFolders(prev => {
-        const existing = new Set(prev.map(f => f.id));
-        const updated = all.filter(p => existing.has(p.id)).map(p => ({
-          ...p,
-          track_count: p.track_count || 0,
-        }));
-        const newOnes = all.filter(p => !existing.has(p.id));
-        return [...updated, ...newOnes.map(p => ({ ...p, track_count: p.track_count || 0 }))];
-      });
-    } catch (err) {
-      console.error(err);
-    }
-  }, []);
-
+  // ── Drop on folder (sidebar) ──────────────────────────────────────────
   const handleDropOnFolder = useCallback(async (folderId, e) => {
     e.preventDefault();
     try {
-      const trackData = JSON.parse(e.dataTransfer.getData('application/json'));
-      const trackIds = Array.isArray(trackData)
-        ? trackData.map(t => t.id)
-        : [trackData.id];
+      const raw = e.dataTransfer.getData('application/json');
+      if (!raw) return;
+      const trackData = JSON.parse(raw);
+      const trackIds = Array.isArray(trackData) ? trackData.map(t => t.id) : [trackData.id];
 
       await apiClient.post(`/playlists/${folderId}/add-tracks`, { track_ids: trackIds });
-      await refreshWorkspaceFolders();
+      // Refresh that folder's track cache
+      const data = await apiClient.get(`/playlists/${folderId}`);
+      setFolderTracks(prev => ({ ...prev, [folderId]: data.tracks || [] }));
+      // Refresh tree counts
+      await fetchTree();
       setSelectedTrackIds(new Set());
     } catch (err) {
       console.error('Drop failed:', err);
     }
-  }, [refreshWorkspaceFolders]);
+  }, [fetchTree]);
 
+  // ── Create folder ─────────────────────────────────────────────────────
   const handleCreateFolder = useCallback(async () => {
     if (!newFolderName.trim()) return;
     try {
-      const data = await apiClient.post('/playlists/create', { name: newFolderName.trim() });
-      const newFolder = {
-        id: data.id || data.playlist_id,
-        name: newFolderName.trim(),
-        track_count: 0,
-        tracks: [],
-      };
-      setWorkspaceFolders(prev => [...prev, newFolder]);
+      await apiClient.post('/playlists/create', { name: newFolderName.trim() });
       setNewFolderName('');
       setShowNewFolderInput(false);
+      await fetchTree();
     } catch (err) {
-      console.error(err);
+      console.error('Failed to create folder:', err);
     }
-  }, [newFolderName]);
+  }, [newFolderName, fetchTree]);
 
+  // ── Delete folder ─────────────────────────────────────────────────────
   const handleDeleteFolder = useCallback(async (folderId) => {
     try {
       await apiClient.delete(`/playlists/${folderId}`);
-      setWorkspaceFolders(prev => prev.filter(f => f.id !== folderId));
-      if (expandedFolderId === folderId) setExpandedFolderId(null);
+      if (selectedFolderId === folderId) {
+        setSelectedFolderId('pool');
+        setDisplayTracks(poolTracks);
+      }
+      await fetchTree();
     } catch (err) {
       console.error('Failed to delete folder:', err);
     }
-  }, [expandedFolderId]);
+  }, [selectedFolderId, poolTracks, fetchTree]);
 
-  // ── Audio playback ─────────────────────────────────────────────────────────
+  // ── Audio playback ────────────────────────────────────────────────────
   const handlePlayTrack = useCallback((track) => {
     const trackId = track.trackid || track.id;
     if (playingTrackId === trackId) {
@@ -811,38 +613,54 @@ export default function PlaylistOrganiser() {
     }
   }, [playingTrackId]);
 
-  // ── Chat submit ────────────────────────────────────────────────────────────
+  // ── Export folders to disk ─────────────────────────────────────────────
+  const handleExport = useCallback(async () => {
+    const playlistIds = allPlaylists.map(p => p.id);
+    if (playlistIds.length === 0) return;
+    try {
+      const data = await apiClient.post('/playlists/export-folders', { playlist_ids: playlistIds });
+      setChatFeedback(`Exported ${data.folders_created} folders, ${data.files_copied} files to ${data.output_directory}${data.errors?.length ? ` (${data.errors.length} errors)` : ''}`);
+    } catch (err) {
+      setChatFeedback(`Export failed: ${err.message}`);
+    }
+  }, [allPlaylists]);
+
+  // ── Chat submit ───────────────────────────────────────────────────────
   const handleChatSubmit = useCallback(async (query) => {
     if (!query.trim()) return;
     setChatStatus('thinking');
     setChatFeedback('');
-    setSuggestedTracks([]);
     try {
       const data = await apiClient.post('/playlists/organize', { query });
       setChatFeedback(data.message || 'Done');
-      if (data.suggested_tracks) {
-        setSuggestedTracks(data.suggested_tracks);
-      }
-      await refreshWorkspaceFolders();
+      // Refresh everything — LLM may have created folders and assigned tracks
+      await fetchTree();
+      // Clear folder track cache so re-expand reloads
+      setFolderTracks({});
     } catch (err) {
       setChatFeedback(`Error: ${err.message}`);
     } finally {
       setChatStatus('done');
       setChatQuery('');
     }
-  }, [refreshWorkspaceFolders]);
+  }, [fetchTree]);
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // Selected folder name for header
+  const selectedFolderName = selectedFolderId === 'pool'
+    ? 'All Tracks'
+    : allPlaylists.find(p => p.id === selectedFolderId)?.name || 'Folder';
+
+  // ── Render ────────────────────────────────────────────────────────────
   return (
     <LazyMotion features={domAnimation}>
       <div style={{ display: 'flex', height: '100%', gap: 0 }}>
 
-        {/* ═══════════ LEFT SIDEBAR — Library Browser ═══════════ */}
+        {/* ═══════════ LEFT SIDEBAR — Folder Tree ═══════════ */}
         <GlassPanel
           depth={2}
           animate={false}
           style={{
-            width: 260, minWidth: 260,
+            width: 280, minWidth: 280,
             display: 'flex', flexDirection: 'column',
             borderRadius: 0,
             borderRight: '1px solid var(--glass-border)',
@@ -851,61 +669,113 @@ export default function PlaylistOrganiser() {
           {/* Purple accent bar */}
           <div style={{ height: 2, background: 'linear-gradient(90deg, #7c3aed, #00d4ff)' }} />
 
-          {/* Header */}
+          {/* Header + New Folder button */}
           <div style={{
-            padding: '16px 16px 8px',
+            padding: '12px 12px 8px',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           }}>
             <span style={{
-              fontSize: 11, fontFamily: 'var(--font-mono)',
-              letterSpacing: 2, color: '#94a3b8',
+              fontSize: 10, fontFamily: 'var(--font-mono)',
+              letterSpacing: 2, color: '#64748b', fontWeight: 700,
             }}>
               FOLDERS
             </span>
-            <span style={{
-              fontSize: 11, fontFamily: 'var(--font-mono)', color: '#475569',
-            }}>
-              {allTracks.length}
-            </span>
-          </div>
-
-          {/* All Tracks button */}
-          <div style={{ padding: '4px 8px' }}>
             <m.button
-              onClick={() => { setSelectedFolderPath(''); setSourceTracks(allTracks); }}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.97 }}
+              onClick={() => setShowNewFolderInput(v => !v)}
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
               style={{
-                width: '100%',
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '8px 12px',
-                borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer',
-                background: selectedFolderPath === '' ? 'rgba(0,212,255,0.08)' : 'transparent',
-                border: selectedFolderPath === ''
-                  ? '1px solid rgba(0,212,255,0.25)'
-                  : '1px solid transparent',
-                color: selectedFolderPath === '' ? '#e2e8f0' : '#94a3b8',
-                fontSize: 11, fontWeight: 600,
-                fontFamily: 'var(--font-ui)',
-                transition: 'background 120ms ease, border-color 120ms ease',
+                background: 'rgba(124,58,237,0.12)',
+                border: '1px solid rgba(124,58,237,0.25)',
+                borderRadius: 'var(--radius-pill)',
+                padding: '3px 10px', color: '#a855f7',
+                fontSize: 10, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: 4,
+                fontFamily: 'var(--font-ui)', fontWeight: 600,
               }}
             >
-              <span style={{ color: selectedFolderPath === '' ? '#00d4ff' : '#475569', display: 'flex' }}>
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 12V3l7-2v9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><circle cx="4" cy="12" r="2" stroke="currentColor" strokeWidth="1.2"/><circle cx="11" cy="10" r="2" stroke="currentColor" strokeWidth="1.2"/></svg>
-              </span>
-              All Tracks
-              <span style={{
-                marginLeft: 'auto', fontSize: 9, color: '#475569',
-                fontFamily: 'var(--font-mono)',
-              }}>
-                {allTracks.length}
-              </span>
+              <PlusIcon /> New
             </m.button>
           </div>
 
+          {/* New folder input */}
+          <AnimatePresence>
+            {showNewFolderInput && (
+              <m.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                style={{ overflow: 'hidden', padding: '0 12px' }}
+              >
+                <div style={{ display: 'flex', gap: 4, paddingBottom: 8 }}>
+                  <input
+                    value={newFolderName}
+                    onChange={e => setNewFolderName(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') handleCreateFolder();
+                      if (e.key === 'Escape') { setShowNewFolderInput(false); setNewFolderName(''); }
+                    }}
+                    placeholder="Folder name..."
+                    autoFocus
+                    style={{
+                      flex: 1, background: 'rgba(255,255,255,0.06)',
+                      border: '1px solid var(--glass-border)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '5px 10px', color: '#e2e8f0',
+                      fontSize: 12, fontFamily: 'var(--font-ui)',
+                      outline: 'none',
+                    }}
+                  />
+                  <m.button
+                    onClick={handleCreateFolder}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    style={{
+                      background: '#00d4ff', color: '#0a0a14',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '5px 10px', fontSize: 11, fontWeight: 700,
+                      border: 'none', cursor: 'pointer',
+                      fontFamily: 'var(--font-ui)',
+                    }}
+                  >
+                    Add
+                  </m.button>
+                </div>
+              </m.div>
+            )}
+          </AnimatePresence>
+
+          {/* All Tracks row */}
+          <div
+            onClick={() => handleSelectFolder('pool')}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 12px', margin: '0 4px', borderRadius: 4,
+              cursor: 'pointer',
+              background: selectedFolderId === 'pool' ? 'rgba(0,212,255,0.08)' : 'transparent',
+              transition: 'background 80ms ease',
+            }}
+          >
+            <span style={{ color: selectedFolderId === 'pool' ? '#00d4ff' : '#475569', display: 'flex' }}>
+              <TrackIcon />
+            </span>
+            <span style={{
+              flex: 1, fontSize: 12, fontWeight: selectedFolderId === 'pool' ? 600 : 500,
+              color: selectedFolderId === 'pool' ? '#e2e8f0' : '#94a3b8',
+              fontFamily: 'var(--font-ui)',
+            }}>
+              All Tracks
+            </span>
+            <span style={{ fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+              {poolTracks.length}
+            </span>
+          </div>
+
+          {/* Divider */}
+          <div style={{ height: 1, background: 'var(--glass-border)', margin: '4px 12px' }} />
+
           {/* Folder tree (scrollable) */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px' }}>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
             {loadError && (
               <div style={{
                 padding: 12, fontSize: 10, color: '#94a3b8',
@@ -914,126 +784,91 @@ export default function PlaylistOrganiser() {
                 {loadError}
               </div>
             )}
-            {folderTree && Object.keys(folderTree.children).sort((a, b) => a.localeCompare(b)).map(key => (
+            {tree.map(node => (
               <FolderTreeNode
-                key={folderTree.children[key].path}
-                node={folderTree.children[key]}
+                key={node.id}
+                node={node}
                 depth={0}
-                selectedPath={selectedFolderPath}
+                selectedId={selectedFolderId}
+                expandedIds={expandedIds}
+                onToggleExpand={handleToggleExpand}
                 onSelect={handleSelectFolder}
+                onDrop={handleDropOnFolder}
+                folderTracks={folderTracks}
               />
             ))}
+            {tree.length === 0 && !loadError && (
+              <div style={{
+                padding: '20px 12px', textAlign: 'center',
+                fontSize: 11, color: '#334155', fontFamily: 'var(--font-ui)',
+              }}>
+                No folders yet. Click "+ New" or use the chat to create folders.
+              </div>
+            )}
+          </div>
+
+          {/* Export button */}
+          <div style={{ padding: '8px 12px', borderTop: '1px solid var(--glass-border)' }}>
+            <m.button
+              onClick={handleExport}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+              style={{
+                width: '100%',
+                padding: '10px 0',
+                background: 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(0,212,255,0.15))',
+                border: '1px solid rgba(124,58,237,0.3)',
+                borderRadius: 'var(--radius-sm)',
+                color: '#e2e8f0', fontSize: 12, fontWeight: 700,
+                cursor: 'pointer', fontFamily: 'var(--font-ui)',
+                letterSpacing: '0.05em',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M7 1v9M3.5 6.5L7 10l3.5-3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M1 11v1.5h12V11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              Export Folders to Disk
+            </m.button>
           </div>
         </GlassPanel>
 
         {/* ═══════════ RIGHT MAIN AREA ═══════════ */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-          {/* WORKSPACE FOLDER BAR */}
+          {/* Header bar */}
           <div style={{
             padding: '12px 20px',
-            display: 'flex', alignItems: 'center', gap: 8,
+            display: 'flex', alignItems: 'center', gap: 12,
             borderBottom: '1px solid var(--glass-border)',
             background: 'rgba(8,8,20,0.4)',
-            flexWrap: 'wrap',
           }}>
+            <span style={{ color: '#a855f7', display: 'flex' }}>
+              {selectedFolderId === 'pool' ? <TrackIcon /> : <FolderIcon open size={16} />}
+            </span>
             <span style={{
-              fontSize: 11, fontFamily: 'var(--font-mono)',
-              letterSpacing: 2, color: '#94a3b8', marginRight: 8,
+              fontSize: 14, fontWeight: 700, color: '#e2e8f0',
+              fontFamily: 'var(--font-ui)',
             }}>
-              WORKSPACE
+              {selectedFolderName}
+            </span>
+            <span style={{
+              fontSize: 10, color: '#475569', fontFamily: 'var(--font-mono)',
+            }}>
+              {filteredTracks.length} tracks
             </span>
 
-            <AnimatePresence>
-              {workspaceFolders.map(folder => (
-                <WorkspaceFolder
-                  key={folder.id}
-                  folder={folder}
-                  isExpanded={expandedFolderId === folder.id}
-                  onToggle={() => setExpandedFolderId(prev => prev === folder.id ? null : folder.id)}
-                  onDelete={() => handleDeleteFolder(folder.id)}
-                  onDrop={(e) => handleDropOnFolder(folder.id, e)}
-                  onDragOver={(e) => { e.preventDefault(); }}
-                  trackCount={folder.track_count || 0}
-                />
-              ))}
-            </AnimatePresence>
-
-            {/* New folder button/input */}
-            {showNewFolderInput ? (
-              <m.div
-                initial={{ width: 0, opacity: 0 }}
-                animate={{ width: 'auto', opacity: 1 }}
-                style={{ display: 'flex', gap: 4 }}
-              >
-                <input
-                  value={newFolderName}
-                  onChange={e => setNewFolderName(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') handleCreateFolder();
-                    if (e.key === 'Escape') setShowNewFolderInput(false);
-                  }}
-                  placeholder="Folder name..."
-                  autoFocus
-                  style={{
-                    background: 'rgba(255,255,255,0.06)',
-                    border: '1px solid var(--glass-border)',
-                    borderRadius: 'var(--radius-pill)',
-                    padding: '4px 12px', color: '#e2e8f0',
-                    fontSize: 12, fontFamily: 'var(--font-ui)',
-                    outline: 'none', width: 140,
-                  }}
-                />
-                <m.button
-                  onClick={handleCreateFolder}
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  style={{
-                    background: '#00d4ff', color: '#0a0a14',
-                    borderRadius: 'var(--radius-pill)',
-                    padding: '4px 10px', fontSize: 11, fontWeight: 600,
-                    border: 'none', cursor: 'pointer',
-                    fontFamily: 'var(--font-ui)',
-                  }}
-                >
-                  ADD
-                </m.button>
-              </m.div>
-            ) : (
-              <m.button
-                onClick={() => setShowNewFolderInput(true)}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                style={{
-                  background: 'rgba(124,58,237,0.15)',
-                  border: '1px solid rgba(124,58,237,0.3)',
-                  borderRadius: 'var(--radius-pill)',
-                  padding: '4px 12px', color: '#a855f7',
-                  fontSize: 12, cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', gap: 4,
-                  fontFamily: 'var(--font-ui)',
-                }}
-              >
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-                New
-              </m.button>
+            {selectedTrackIds.size > 0 && (
+              <span style={{
+                fontSize: 10, color: '#00d4ff', fontFamily: 'var(--font-mono)',
+                background: 'rgba(0,212,255,0.08)', borderRadius: 'var(--radius-pill)',
+                padding: '2px 8px', marginLeft: 'auto',
+              }}>
+                {selectedTrackIds.size} selected -- drag to a folder
+              </span>
             )}
           </div>
-
-          {/* Expanded folder contents */}
-          <AnimatePresence>
-            {expandedFolderId && (
-              <m.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-                style={{ overflow: 'hidden', borderBottom: '1px solid var(--glass-border)' }}
-              >
-                <ExpandedFolderTracks folderId={expandedFolderId} />
-              </m.div>
-            )}
-          </AnimatePresence>
 
           {/* Search bar */}
           <div style={{ padding: '8px 20px', borderBottom: '1px solid rgba(124,58,237,0.08)' }}>
@@ -1070,30 +905,27 @@ export default function PlaylistOrganiser() {
             </div>
           </div>
 
-          {/* TRACK CARDS GRID */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-              gap: 12,
-            }}>
-              {displayedTracks.map((track, index) => (
-                <TrackCard
-                  key={track.trackid || track.id}
-                  track={track}
-                  isSelected={selectedTrackIds.has(track.trackid || track.id)}
-                  isPlaying={playingTrackId === (track.trackid || track.id)}
-                  onSelect={(e) => handleTrackSelect(track.trackid || track.id, index, e)}
-                  onPlay={() => handlePlayTrack(track)}
-                  onDragStart={handleDragStart}
-                />
-              ))}
-            </div>
+          {/* TRACK LIST */}
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {filteredTracks.map((track, index) => (
+              <TrackRow
+                key={track.trackid || track.id}
+                track={track}
+                isSelected={selectedTrackIds.has(track.trackid || track.id)}
+                isPlaying={playingTrackId === (track.trackid || track.id)}
+                onSelect={(e) => handleTrackSelect(track.trackid || track.id, index, e)}
+                onPlay={() => handlePlayTrack(track)}
+                onDragStart={handleDragStart}
+              />
+            ))}
 
-            {sourceTracks.length === 0 && !loadError && (
+            {displayTracks.length === 0 && !loadError && (
               <div style={{ textAlign: 'center', padding: 60, color: '#475569' }}>
                 <p style={{ fontSize: 14, fontFamily: 'var(--font-ui)' }}>
-                  Select a playlist from the library to browse tracks
+                  {selectedFolderId === 'pool'
+                    ? 'No tracks in library'
+                    : 'Empty folder -- drag tracks here from All Tracks'
+                  }
                 </p>
               </div>
             )}
@@ -1105,12 +937,7 @@ export default function PlaylistOrganiser() {
             setChatQuery={setChatQuery}
             chatStatus={chatStatus}
             chatFeedback={chatFeedback}
-            suggestedTracks={suggestedTracks}
             onSubmit={handleChatSubmit}
-            onPlayTrack={handlePlayTrack}
-            playingTrackId={playingTrackId}
-            workspaceFolders={workspaceFolders}
-            onAddToFolder={handleDropOnFolder}
           />
         </div>
       </div>
