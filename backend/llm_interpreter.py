@@ -9,6 +9,12 @@ from dotenv import load_dotenv
 from supabase import Client
 from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, RateLimitError
 
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
@@ -403,6 +409,60 @@ _PLAYLIST_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_tracks",
+            "description": (
+                "Move tracks matching criteria from one playlist to another. "
+                "Removes from source and adds to target."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_playlist": {
+                        "type": "string",
+                        "description": "Name of the source playlist to move tracks FROM",
+                    },
+                    "target_playlist": {
+                        "type": "string",
+                        "description": "Name of the target playlist to move tracks TO (will be created if it doesn't exist)",
+                    },
+                    "criteria": {
+                        "type": "object",
+                        "description": "Optional criteria to filter which tracks to move. If omitted, moves ALL tracks.",
+                        "properties": {
+                            "genres": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Genre/style tags to match",
+                            },
+                            "vibes": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Vibe/mood descriptors to match",
+                            },
+                            "energy_range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                                "description": "[min, max] energy on 0.0-1.0 scale",
+                            },
+                            "bpm_range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2,
+                                "description": "[min_bpm, max_bpm]",
+                            },
+                        },
+                    },
+                },
+                "required": ["source_playlist", "target_playlist"],
+            },
+        },
+    },
 ]
 
 
@@ -460,6 +520,16 @@ class SemanticInterpreter:
     # -------------------------------------------------------------------------
 
     def _init_providers(self):
+        # Anthropic (Claude) — used as primary for playlist tool-calling
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+        if anthropic_key and HAS_ANTHROPIC:
+            self._anthropic_client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+            self._anthropic_model = "claude-sonnet-4-20250514"
+            logger.info("Anthropic (Claude Sonnet) configured as primary playlist provider")
+        else:
+            self._anthropic_client = None
+            self._anthropic_model = None
+
         if os.getenv("GROQ_API_KEY"):
             self.providers.append({
                 "name": "Groq",
@@ -660,6 +730,34 @@ class SemanticInterpreter:
         actions = await self._generate_with_playlist_tools(system_prompt, user_prompt)
         return actions
 
+    async def _generate_with_playlist_tools_claude(
+        self, system_prompt: str, user_prompt: str
+    ) -> List[Dict[str, Any]]:
+        """Use Claude for playlist tool calling (primary provider)."""
+        # Convert OpenAI tool format to Anthropic format
+        anthropic_tools = []
+        for tool in _PLAYLIST_TOOLS:
+            fn = tool["function"]
+            anthropic_tools.append({
+                "name": fn["name"],
+                "description": fn["description"],
+                "input_schema": fn["parameters"],
+            })
+
+        response = await self._anthropic_client.messages.create(
+            model=self._anthropic_model,
+            max_tokens=2048,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+            tools=anthropic_tools,
+        )
+
+        actions = []
+        for block in response.content:
+            if block.type == "tool_use":
+                actions.append({"tool": block.name, "args": block.input})
+        return actions
+
     async def _generate_with_playlist_tools(
         self, system_prompt: str, user_prompt: str
     ) -> List[Dict[str, Any]]:
@@ -667,6 +765,20 @@ class SemanticInterpreter:
         Call the LLM with ``_PLAYLIST_TOOLS``. Returns a list of action dicts.
         Falls back provider-by-provider on failure.
         """
+        # Try Claude first if available
+        if self._anthropic_client:
+            try:
+                actions = await asyncio.wait_for(
+                    self._generate_with_playlist_tools_claude(system_prompt, user_prompt),
+                    timeout=30,
+                )
+                if actions:
+                    logger.info(f"Claude returned {len(actions)} playlist actions")
+                    return actions
+            except Exception as e:
+                logger.warning(f"Claude playlist tool calling failed: {e}, falling back to other providers")
+
+        # Existing provider chain continues below...
         attempts = 0
         current_idx = self.active_provider_index
 

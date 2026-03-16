@@ -396,6 +396,12 @@ async def organize_playlists(req: OrganizeRequest):
                 )
                 results.append(result)
 
+            elif tool == "move_tracks":
+                result = await _execute_move_tracks(db, args, existing_playlists)
+                if result.get("moved", 0) > 0:
+                    tracks_assigned += result["moved"]
+                results.append(result)
+
         return {
             "message": f"Created {playlists_created} folders, assigned {tracks_assigned} tracks",
             "actions": results,
@@ -858,4 +864,98 @@ async def _execute_suggest_for_playlist(
         "action": "suggest_for_playlist",
         "playlist_name": playlist_name,
         "suggestions": suggestions,
+    }
+
+
+def _track_matches_criteria(track: dict, criteria: dict) -> bool:
+    """Check if a track matches the given criteria (local filter, no DB query)."""
+    if not criteria:
+        return True
+
+    genres = criteria.get("genres", [])
+    vibes = criteria.get("vibes", [])
+    energy_range = criteria.get("energy_range")
+    bpm_range = criteria.get("bpm_range")
+
+    # Check genres (track's semantic_tags)
+    if genres:
+        track_tags = [t.lower() for t in (track.get("semantic_tags") or [])]
+        if not any(g.lower() in track_tags for g in genres):
+            return False
+
+    # Check vibes
+    if vibes:
+        track_vibes = track.get("vibe_descriptors") or track.get("vibe") or []
+        if isinstance(track_vibes, str):
+            track_vibes = [track_vibes]
+        track_vibes = [v.lower() for v in track_vibes]
+        if not any(v.lower() in track_vibes for v in vibes):
+            return False
+
+    # Check energy
+    if energy_range:
+        energy = track.get("energy")
+        if energy is not None and not (energy_range[0] <= energy <= energy_range[1]):
+            return False
+
+    # Check BPM
+    if bpm_range:
+        bpm = track.get("bpm")
+        if bpm is not None and not (bpm_range[0] <= bpm <= bpm_range[1]):
+            return False
+
+    return True
+
+
+async def _execute_move_tracks(
+    db, args: dict, existing_playlists: list
+) -> dict:
+    """Move tracks from source playlist to target playlist."""
+    source_name = args.get("source_playlist", "")
+    target_name = args.get("target_playlist", "")
+    criteria = args.get("criteria")
+
+    # Find source playlist (case-insensitive)
+    source = next(
+        (p for p in existing_playlists if p["name"].lower() == source_name.lower()),
+        None,
+    )
+    if not source:
+        return {"action": "move_tracks", "error": f"Source playlist '{source_name}' not found"}
+
+    # Find or create target playlist
+    target = next(
+        (p for p in existing_playlists if p["name"].lower() == target_name.lower()),
+        None,
+    )
+    if not target:
+        target_id = str(uuid.uuid4())
+        await db.create_playlist(target_id, target_name, "organiser", None)
+        target = {"id": target_id, "name": target_name}
+
+    # Get source tracks
+    source_data = await db.get_playlist(source["id"])
+    source_tracks = source_data.get("tracks", [])
+
+    if criteria:
+        # Filter by criteria
+        matching_ids = []
+        for track in source_tracks:
+            if _track_matches_criteria(track, criteria):
+                matching_ids.append(track["trackid"])
+    else:
+        matching_ids = [t["trackid"] for t in source_tracks]
+
+    if not matching_ids:
+        return {"action": "move_tracks", "moved": 0, "source": source_name, "target": target_name}
+
+    # Add to target, remove from source
+    await db.add_tracks_to_playlist(target["id"], matching_ids)
+    await db.remove_tracks_from_playlist(source["id"], matching_ids)
+
+    return {
+        "action": "move_tracks",
+        "moved": len(matching_ids),
+        "source": source_name,
+        "target": target_name,
     }
