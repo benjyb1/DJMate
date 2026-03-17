@@ -131,6 +131,7 @@ export default function App() {
     (async () => {
       try {
         setIsLoading(true);
+        if (!supabase) throw new Error('Supabase not configured — check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY');
         const { data, error: err } = await supabase
           .from('tracks')
           .select('trackid,title,artist,bpm,key,album_art_url,audio_url,x_coord,y_coord,z_coord,track_labels(energy,semantic_tags,vibe),track_features(mfcc)');
