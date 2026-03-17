@@ -23,22 +23,15 @@ router = APIRouter()
 
 # ── Lazy singletons (initialised on first request) ─────────────────────────────
 _interpreter = None
-_db          = None
 
-
-def _get_db():
-    global _db
-    if _db is None:
-        from backend.data.db_interface import DatabaseManager
-        _db = DatabaseManager(enable_caching=True, pool_size=10)
-    return _db
+from backend.dependencies import get_db
 
 
 async def _get_interpreter():
     global _interpreter
     if _interpreter is None:
         from backend.llm_interpreter import SemanticInterpreter
-        db = _get_db()
+        db = get_db()
         _interpreter = SemanticInterpreter(supabase_client=db.client)
         await _interpreter.initialize()
     return _interpreter
@@ -197,8 +190,8 @@ async def interpret(req: InterpretRequest):
         params = await interp.interpret(req.query.strip(), context=context)
         return InterpretResponse(params=params)
     except Exception as e:
-        logger.error(f"Interpret error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Interpret error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/search", response_model=SearchResponse)
@@ -212,7 +205,7 @@ async def search(req: SearchRequest):
     """
     try:
         interp = await _get_interpreter()
-        db     = _get_db()
+        db     = get_db()
         params = req.params
         intent = params.get("intent", "vibe_genre_search")
 
@@ -380,8 +373,8 @@ async def search(req: SearchRequest):
         )
 
     except Exception as e:
-        logger.error(f"Search error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Search error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/health")

@@ -24,16 +24,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ── Lazy singletons (initialised on first request) ───────────────────────────
-_db = None
 _learner = None
 
-
-def _get_db():
-    global _db
-    if _db is None:
-        from backend.data.db_interface import DatabaseManager
-        _db = DatabaseManager(enable_caching=True, pool_size=10)
-    return _db
+from backend.dependencies import get_db
 
 
 def _get_learner():
@@ -49,7 +42,7 @@ def _get_learner():
 class UpdateLabelsRequest(BaseModel):
     semantic_tags: Optional[List[str]] = None
     vibe: Optional[List[str]] = None
-    energy: Optional[float] = Field(None, ge=0.0, le=1.0)
+    energy: Optional[float] = Field(None, ge=1, le=10)
 
 
 class TrackLabels(BaseModel):
@@ -71,22 +64,22 @@ class AvailableLabels(BaseModel):
 async def get_available_tags():
     """Return all unique semantic_tags and vibes across the library (for autocomplete)."""
     try:
-        db = _get_db()
+        db = get_db()
         result = await db.get_available_tags()
         return AvailableLabels(
             semantic_tags=result.get("semantic_tags", []),
             vibes=result.get("vibes", []),
         )
     except Exception as e:
-        logger.error(f"get_available_tags error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("get_available_tags error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/{trackid}", response_model=TrackLabels)
 async def get_track_labels(trackid: str):
     """Get current labels for a single track."""
     try:
-        db = _get_db()
+        db = get_db()
         labels = await db.get_track_labels(trackid)
         if labels is None:
             raise HTTPException(status_code=404, detail="Track labels not found")
@@ -100,8 +93,8 @@ async def get_track_labels(trackid: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"get_track_labels error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("get_track_labels error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/{trackid}", response_model=TrackLabels)
@@ -124,7 +117,7 @@ async def update_track_labels(trackid: str, req: UpdateLabelsRequest):
         raise HTTPException(status_code=400, detail="No fields to update")
 
     try:
-        db = _get_db()
+        db = get_db()
         result = await db.update_track_labels(trackid, updates, log_corrections=True)
         return TrackLabels(
             trackid=result["trackid"],
@@ -134,8 +127,8 @@ async def update_track_labels(trackid: str, req: UpdateLabelsRequest):
             tag_source=result.get("tag_source"),
         )
     except Exception as e:
-        logger.error(f"update_track_labels error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("update_track_labels error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ── Learning endpoints ───────────────────────────────────────────────────────
@@ -154,8 +147,8 @@ async def trigger_propagation(dry_run: bool = False) -> Dict[str, Any]:
         result = await learner.propagate(dry_run=dry_run)
         return result
     except Exception as e:
-        logger.error(f"propagation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("propagation error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/learning/status")
@@ -165,5 +158,5 @@ async def get_learning_status() -> Dict[str, Any]:
         learner = _get_learner()
         return await learner.get_status()
     except Exception as e:
-        logger.error(f"learning status error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("learning status error")
+        raise HTTPException(status_code=500, detail="Internal server error")

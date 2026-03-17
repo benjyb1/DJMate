@@ -5,7 +5,6 @@ import asyncio
 import numpy as np
 from typing import Dict, Any, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
-from dotenv import load_dotenv
 from supabase import Client
 from openai import AsyncOpenAI, APITimeoutError, APIConnectionError, RateLimitError
 
@@ -14,8 +13,6 @@ try:
     HAS_ANTHROPIC = True
 except ImportError:
     HAS_ANTHROPIC = False
-
-load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -122,21 +119,21 @@ _SEARCH_TOOLS = [
             "name": "set_energy",
             "description": (
                 "Call this when you can infer an energy level from the user's request. "
-                "Energy is on a 0.0-1.0 scale. Common mappings: "
-                "'absolute banger'/'peak time'/'kicking' -> [0.85, 1.0]; "
-                "'high energy'/'banging' -> [0.75, 0.95]; "
-                "'energetic'/'driving' -> [0.6, 0.85]; "
-                "'mid-set'/'groovy' -> [0.45, 0.7]; "
-                "'after hours'/'late night' -> [0.35, 0.6]; "
-                "'closing'/'come-down' -> [0.25, 0.55]; "
-                "'warm-up'/'chill' -> [0.05, 0.35]. "
+                "Energy is on a 1-10 integer scale. Common mappings: "
+                "'absolute banger'/'peak time'/'kicking' -> [9, 10]; "
+                "'high energy'/'banging' -> [8, 10]; "
+                "'energetic'/'driving' -> [6, 8]; "
+                "'mid-set'/'groovy' -> [5, 7]; "
+                "'after hours'/'late night' -> [3, 5]; "
+                "'closing'/'come-down' -> [2, 4]; "
+                "'warm-up'/'chill' -> [1, 3]. "
                 "Also call this for adjectives like 'banger', 'kicking', 'mellow', 'laid-back', 'deep'."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "min": {"type": "number", "description": "Minimum energy 0.0-1.0"},
-                    "max": {"type": "number", "description": "Maximum energy 0.0-1.0"},
+                    "min": {"type": "integer", "description": "Minimum energy 1-10"},
+                    "max": {"type": "integer", "description": "Maximum energy 1-10"},
                 },
                 "required": ["min", "max"],
             },
@@ -473,7 +470,7 @@ _PLAYLIST_TOOLS = [
                                 "items": {"type": "number"},
                                 "minItems": 2,
                                 "maxItems": 2,
-                                "description": "[min, max] energy on 0.0-1.0 scale",
+                                "description": "[min, max] energy on 1-10 integer scale",
                             },
                             "bpm_range": {
                                 "type": "array",
@@ -1706,12 +1703,12 @@ OUTPUT — valid JSON only:
                             logger.warning(f"  set_vibe: '{name}' not in DB, discarded")
 
             elif fn == "set_energy":
-                lo = float(args.get("min", 0.5))
-                hi = float(args.get("max", 0.8))
-                # Clamp to DB scale [0, 1]
+                lo = int(round(float(args.get("min", 5))))
+                hi = int(round(float(args.get("max", 7))))
+                # Clamp to DB scale [1, 10]
                 params["energy_range"] = [
-                    round(max(0.0, min(1.0, lo)), 3),
-                    round(max(0.0, min(1.0, hi)), 3),
+                    max(1, min(10, lo)),
+                    max(1, min(10, hi)),
                 ]
 
             elif fn == "set_bpm":

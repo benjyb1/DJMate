@@ -3,10 +3,13 @@ import asyncio
 import subprocess
 import sys
 import os
+import logging
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 

@@ -37,12 +37,14 @@ import re
 import subprocess
 import sys
 import tempfile
-import unicodedata
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 from dotenv import load_dotenv
+
+sys.path.insert(0, str(Path(__file__).parent))
+from shared_utils import make_cover_filename, get_supabase as _shared_get_supabase
 
 # Suppress TensorFlow / MLIR C++ noise before Essentia loads the TF runtime
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")   # ERROR only
@@ -429,23 +431,9 @@ def safe_extract_bpm_key(filepath: Path,
 def _make_cover_filename(artist: str, title: str) -> str:
     """Build a safe ASCII storage filename from artist + title.
 
-    Strips diacritics (é→e, ü→u, ñ→n, etc.) then removes anything that isn't
-    alphanumeric, a hyphen, or underscore.
-
-    MUST stay identical to create_safe_filename() in upload_album_covers.py,
-    populate_album_art_urls.py, AND makeSupabaseCoverUrl() in Frontend coverUrl.js.
+    Delegates to shared_utils.make_cover_filename (canonical implementation).
     """
-    raw = f"{artist}_{title}"
-    # 1. NFKD decompose (é → e + combining accent)
-    # 2. Drop all non-ASCII (equivalent to keeping only the base letters)
-    raw = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii")
-    # 3. Lowercase
-    raw = raw.lower()
-    # 4. Replace non-alnum (except - _) with _
-    raw = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in raw)
-    # 5. Collapse consecutive underscores, truncate
-    raw = "_".join(filter(None, raw.split("_")))
-    return raw[:150]
+    return make_cover_filename(artist, title, ext="")
 
 
 def _extract_album_art(filepath: Path) -> Optional[bytes]:
@@ -564,14 +552,12 @@ def _compute_mfcc_fingerprint(filepath: Path) -> Optional[list]:
 # ── Supabase helpers ──────────────────────────────────────────────────────────
 
 def get_supabase():
-    load_dotenv()
-    from supabase import create_client
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_KEY")
-    if not url or not key:
-        log.error("SUPABASE_URL and SUPABASE_KEY must be set in .env")
+    """Create and return a Supabase client. Delegates to shared_utils."""
+    try:
+        return _shared_get_supabase()
+    except RuntimeError as exc:
+        log.error(str(exc))
         sys.exit(1)
-    return create_client(url, key)
 
 
 def load_existing_index(supabase) -> tuple[set, set, set]:

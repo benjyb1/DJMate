@@ -1,21 +1,16 @@
 import os
 import json
-import unicodedata
+import sys
 from pathlib import Path
-from supabase import create_client, Client
 from mutagen import File
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
 from mutagen.mp4 import MP4
 
-from dotenv import load_dotenv
+sys.path.insert(0, str(Path(__file__).parent))
+from shared_utils import make_cover_filename, get_supabase
 
-load_dotenv()
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = get_supabase()
 BUCKET_NAME = "album-covers"
 PROGRESS_FILE = "upload_progress_tracks.json"
 
@@ -32,22 +27,8 @@ def save_progress(progress):
         json.dump(progress, f, indent=2)
 
 def create_safe_filename(artist, title):
-    """Build a safe ASCII storage filename from artist + title.
-
-    MUST stay identical to _make_cover_filename() in ingest_music.py,
-    create_safe_filename() in populate_album_art_urls.py,
-    AND makeSupabaseCoverUrl() in Frontend/src/utils/coverUrl.js.
-    """
-    safe_name = f"{artist}_{title}"
-    # 1. NFKD decompose (é → e + combining accent) then drop all non-ASCII
-    safe_name = unicodedata.normalize("NFKD", safe_name).encode("ascii", "ignore").decode("ascii")
-    # 2. Lowercase
-    safe_name = safe_name.lower()
-    # 3. Replace non-alnum (except - _) with _
-    safe_name = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in safe_name)
-    # 4. Collapse consecutive underscores, truncate to 150
-    safe_name = '_'.join(filter(None, safe_name.split('_')))
-    return safe_name[:150]
+    """Build a safe ASCII storage filename. Delegates to shared_utils."""
+    return make_cover_filename(artist, title, ext="")
 
 # ==================== ALBUM ART EXTRACTION ====================
 

@@ -152,7 +152,7 @@ function TagInput({ placeholder, value, onChange, suggestions, onAdd }) {
 export default function TagEditor({ track, onClose, onSave, availableTags = [], availableVibes = [] }) {
   const [tags, setTags]         = useState(track.semantic_tags || []);
   const [vibes, setVibes]       = useState(track.vibe_descriptors || []);
-  const [energy, setEnergy]     = useState(track.energy ?? 0.5);
+  const [energy, setEnergy]     = useState(track.energy ?? 5);
   const [tagInput, setTagInput] = useState('');
   const [vibeInput, setVibeInput] = useState('');
   const [saving, setSaving]     = useState(false);
@@ -173,7 +173,7 @@ export default function TagEditor({ track, onClose, onSave, availableTags = [], 
       await apiClient.put(`/tags/${track.trackid}`, {
         semantic_tags: tags,
         vibe: vibes,
-        energy: parseFloat(energy.toFixed(2)),
+        energy: Math.round(energy),
       });
       onSave?.({ semantic_tags: tags, vibe_descriptors: vibes, energy });
       onClose();
@@ -339,16 +339,16 @@ export default function TagEditor({ track, onClose, onSave, availableTags = [], 
               fontSize: 12, color: '#00d4ff', fontWeight: 700,
               fontFamily: "'JetBrains Mono', monospace",
             }}>
-              {parseFloat(energy).toFixed(2)}
+              {Math.round(energy)}
             </span>
           </div>
           <input
             type="range"
-            min="0"
-            max="1"
-            step="0.05"
+            min="1"
+            max="10"
+            step="1"
             value={energy}
-            onChange={e => setEnergy(parseFloat(e.target.value))}
+            onChange={e => setEnergy(parseInt(e.target.value))}
             style={{
               width: '100%',
               height: 4,

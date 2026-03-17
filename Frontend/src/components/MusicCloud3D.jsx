@@ -19,7 +19,7 @@ const TrackNode = ({
   // Dynamic sizing based on energy and activity state
   const nodeSize = useMemo(() => {
     const baseSize = 0.5;
-    const energyMultiplier = (track.energy || 0.5) * 0.5 + 0.75;
+    const energyMultiplier = ((track.energy || 5) / 10) * 0.5 + 0.75;
     const activeMultiplier = isActive ? 1.5 : 1;
     const highlightMultiplier = isHighlighted ? 1.3 : 1;
     return baseSize * energyMultiplier * activeMultiplier * highlightMultiplier;
@@ -46,7 +46,7 @@ const TrackNode = ({
       meshRef.current.position.y = position[1] + Math.sin(state.clock.elapsedTime + position[0]) * 0.1;
       
       // Rotation based on energy
-      const rotationSpeed = (track.energy || 0.5) * 0.5;
+      const rotationSpeed = ((track.energy || 5) / 10) * 0.5;
       meshRef.current.rotation.z += rotationSpeed * 0.01;
       
       // Pulsing effect for highlighted tracks
@@ -102,7 +102,7 @@ const TrackNode = ({
           >
             {`${track.artist} - ${track.title}`}
             {'\n'}
-            {`${Math.round(track.bpm || 120)} BPM | ${track.key || '?'} | E${((track.energy || 0.5) * 10).toFixed(1)}`}
+            {`${Math.round(track.bpm || 120)} BPM | ${track.key || '?'} | E${Math.round(track.energy || 5)}`}
           </Text>
         </Billboard>
       )}

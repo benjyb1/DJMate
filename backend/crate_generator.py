@@ -25,7 +25,7 @@ class CrateSpec:
     parent_crate_id: Optional[str] = None
     genres: List[Dict[str, float]] = field(default_factory=list)   # [{name, confidence}]
     vibes: List[Dict[str, float]] = field(default_factory=list)
-    energy_range: Optional[List[float]] = None  # [min, max] 0.0-1.0
+    energy_range: Optional[List[float]] = None  # [min, max] 1-10
     bpm_range: Optional[List[float]] = None
     track_count: int = 5
     direction: Optional[str] = None       # energy_up, energy_down, genre_shift, bridge, maintain
@@ -244,10 +244,10 @@ class CrateGenerator:
                 # Key compatibility
                 key_score = key_compatibility(c.get("key"), last.get("key"))
 
-                # Energy arc: slight upward trend within a crate
-                last_energy = last.get("energy") or 0.5
-                c_energy = c.get("energy") or 0.5
-                energy_arc = max(0.0, min(1.0, 0.5 + (c_energy - last_energy) * 2))
+                # Energy arc: slight upward trend within a crate (energy is 1-10)
+                last_energy = last.get("energy") or 5
+                c_energy = c.get("energy") or 5
+                energy_arc = max(0.0, min(1.0, 0.5 + (c_energy - last_energy) / 10))
 
                 score = (
                     relevance * 0.40
@@ -321,8 +321,8 @@ class CrateGenerator:
         key_score = key_compatibility(a.get("key"), b.get("key"))
         bpm_diff = abs((a.get("bpm") or 128) - (b.get("bpm") or 128))
         bpm_score = max(0.0, 1.0 - bpm_diff / 15)
-        energy_diff = abs((a.get("energy") or 0.5) - (b.get("energy") or 0.5))
-        energy_smooth = max(0.0, 1.0 - energy_diff * 4)
+        energy_diff = abs((a.get("energy") or 5) - (b.get("energy") or 5))
+        energy_smooth = max(0.0, 1.0 - energy_diff / 5)  # 5-point diff → 0
         return key_score * 0.4 + bpm_score * 0.3 + energy_smooth * 0.3
 
     # ------------------------------------------------------------------

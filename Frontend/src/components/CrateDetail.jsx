@@ -99,7 +99,7 @@ export default function CrateDetail({
           <div
             style={{
               height: '100%',
-              width: `${(meta.avg_energy || 0) * 100}%`,
+              width: `${((meta.avg_energy || 0) / 10) * 100}%`,
               background: 'linear-gradient(90deg, #7c3aed, #00d4ff)',
               borderRadius: 'var(--radius-pill)',
             }}

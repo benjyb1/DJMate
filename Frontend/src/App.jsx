@@ -8,6 +8,7 @@ import LiveMode from './components/LiveMode';
 import PlaylistOrganiser from './components/playlist/PlaylistOrganiser';
 import GlassPanel from './components/ui/GlassPanel';
 import { makeSupabaseCoverUrl } from './utils/coverUrl';
+import { IconPlay, IconPause, IconSearch, IconWaveform } from './components/icons';
 
 // ── Parse semantic_tags (handles array, JSON string, or CSV) ──────────────
 function parseTags(raw) {
@@ -69,28 +70,7 @@ function makeGenerativeTexture(node) {
   return new THREE.CanvasTexture(canvas);
 }
 
-// ── SVG Icons ─────────────────────────────────────────────────────────────
-const IconPlay = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <polygon points="5,3 19,12 5,21" />
-  </svg>
-);
-const IconPause = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" />
-  </svg>
-);
-const IconSearch = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
-    <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-  </svg>
-);
-const IconWaveform = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-    <line x1="12" y1="2" x2="12" y2="22" /><line x1="8" y1="6" x2="8" y2="18" />
-    <line x1="16" y1="6" x2="16" y2="18" /><line x1="4" y1="10" x2="4" y2="14" /><line x1="20" y1="10" x2="20" y2="14" />
-  </svg>
-);
+// Icons imported from ./components/icons
 
 // ── Waveform visualization bars ──────────────────────────────────────────
 function WaveformViz({ bpm, isPlaying }) {
@@ -704,7 +684,7 @@ export default function App() {
                         {[
                           { label: 'TEMPO/BPM', value: selectedTrack.bpm ? parseFloat(selectedTrack.bpm).toFixed(2) : '—', color: '#00d4ff' },
                           { label: 'HARMONIC KEY', value: selectedTrack.key || '—', color: '#a855f7' },
-                          { label: 'ENERGY', value: selectedTrack.energy != null ? parseFloat(selectedTrack.energy).toFixed(2) : '—', color: '#7c3aed' },
+                          { label: 'ENERGY', value: selectedTrack.energy != null ? Math.round(selectedTrack.energy) : '—', color: '#7c3aed' },
                           { label: 'GENRE', value: selectedTrack.semanticTags?.[0] || '—', color: '#00d4ff', small: true },
                         ].map(({ label, value, color, small }) => (
                           <div key={label} style={{

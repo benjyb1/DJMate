@@ -6,6 +6,7 @@ import GlassPanel from './ui/GlassPanel';
 import TagEditor from './TagEditor';
 import CrateBuilder from './CrateBuilder';
 import { makeSupabaseCoverUrl } from '../utils/coverUrl';
+import { IconMic, IconPlus, IconClose, IconSend, IconVector, IconPlay, IconPause, IconSearch, IconEdit } from './icons';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -36,7 +37,7 @@ function trackTo7D(track) {
     y: track.y || 0,
     z: track.z || 0,
     bpm_norm: normBpm(track.bpm),
-    energy: parseFloat(track.energy ?? 0.5),
+    energy: parseFloat(track.energy ?? 5),
     key_num: camelotToNum(track.key),
     vibe_hash: vibeHash(track.semanticTags || track.semantic_tags),
   };
@@ -80,8 +81,8 @@ function getSetDirectionSummary(setList) {
   dims.forEach(d => { deltas[d] /= n; });
 
   const parts = [];
-  if (deltas.energy > 0.05) parts.push('Building energy');
-  else if (deltas.energy < -0.05) parts.push('Dropping down');
+  if (deltas.energy > 0.5) parts.push('Building energy');
+  else if (deltas.energy < -0.5) parts.push('Dropping down');
   else parts.push('Maintaining groove');
 
   if (Math.abs(deltas.bpm_norm) > 0.03) {
@@ -114,7 +115,7 @@ function suggestDirectional(anchor, setList, allNodes) {
   if (setList.length >= 2) {
     const tail = setList.slice(-Math.min(4, setList.length));
     for (let i = 1; i < tail.length; i++) {
-      energyDelta += parseFloat(tail[i].energy ?? 0.5) - parseFloat(tail[i - 1].energy ?? 0.5);
+      energyDelta += parseFloat(tail[i].energy ?? 5) - parseFloat(tail[i - 1].energy ?? 5);
     }
     energyDelta /= (tail.length - 1);
   }
@@ -137,13 +138,13 @@ function suggestDirectional(anchor, setList, allNodes) {
     const bpmScore = bpmDiff <= 8 ? 1 - (bpmDiff / 8) * 0.3 : Math.max(0, 1 - bpmDiff / 15);
 
     // Energy score (25%) — reward continuing the energy delta trend
-    const nEnergy = parseFloat(n.energy ?? 0.5);
-    const aEnergy = parseFloat(anchor.energy ?? 0.5);
+    const nEnergy = parseFloat(n.energy ?? 5);
+    const aEnergy = parseFloat(anchor.energy ?? 5);
     const candidateDelta = nEnergy - aEnergy;
     const trendAlignment = energyDelta !== 0
       ? (Math.sign(candidateDelta) === Math.sign(energyDelta) ? 0.3 : -0.1)
       : 0;
-    const energyProximity = 1 - Math.min(1, Math.abs(candidateDelta) / 0.5);
+    const energyProximity = 1 - Math.min(1, Math.abs(candidateDelta) / 5);
     const energyScore = Math.max(0, Math.min(1, energyProximity + trendAlignment));
 
     // Key score (20%) — Camelot compatibility
@@ -172,7 +173,7 @@ function suggestDirectional(anchor, setList, allNodes) {
     .map(n => ({ ...n, _reason: getDirectionReason(n, anchor) }));
 
   const energyUp = candidates
-    .filter(n => parseFloat(n.energy ?? 0.5) > anchorEnergy + 0.08)
+    .filter(n => parseFloat(n.energy ?? 5) > anchorEnergy + 1)
     .filter(n => keyCompatibility(n.key, anchor.key) >= 0.3)
     .sort((a, b) => {
       const sa = keyCompatibility(a.key, anchor.key) + (1 - Math.abs((a.bpm||130)-(anchor.bpm||130))/15);
@@ -183,7 +184,7 @@ function suggestDirectional(anchor, setList, allNodes) {
     .map(n => ({ ...n, _reason: getDirectionReason(n, anchor) }));
 
   const stepDown = candidates
-    .filter(n => parseFloat(n.energy ?? 0.5) < anchorEnergy - 0.08)
+    .filter(n => parseFloat(n.energy ?? 5) < anchorEnergy - 1)
     .filter(n => keyCompatibility(n.key, anchor.key) >= 0.3)
     .sort((a, b) => {
       const sa = keyCompatibility(a.key, anchor.key) + (1 - Math.abs((a.bpm||130)-(anchor.bpm||130))/15);
@@ -310,50 +311,11 @@ function estimateKeyFromChroma(chroma) {
   return NOTE_NAMES[maxIdx] + (min > maj ? 'm' : '');
 }
 
-// ── SVG Icons ──────────────────────────────────────────────────────────────
-const IconMic = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-    <rect x="9" y="2" width="6" height="11" rx="3" />
-    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-    <line x1="12" y1="19" x2="12" y2="23" />
-    <line x1="8" y1="23" x2="16" y2="23" />
-  </svg>
-);
-const IconPlus = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-    <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-  </svg>
-);
-const IconX = () => (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-  </svg>
-);
-const IconSend = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22,2 15,22 11,13 2,9" />
-  </svg>
-);
-const IconVector = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-    <path d="M5 12h14" /><polyline points="12,5 19,12 12,19" />
-  </svg>
-);
-const IconPlay = () => (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-    <polygon points="5,3 19,12 5,21" />
-  </svg>
-);
-const IconPause = () => (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-    <rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" />
-  </svg>
-);
-const IconSimilar = () => (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-    <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-  </svg>
-);
+// Icons imported from ./icons
+// IconX alias for LiveMode (was 11px close icon)
+const IconX = (props) => <IconClose size={11} {...props} />;
+// IconSimilar alias for LiveMode (was 11px search icon)
+const IconSimilar = (props) => <IconSearch size={11} {...props} />;
 
 // ── Shared album art renderer ──────────────────────────────────────────────
 function TrackArt({ track, size = 44 }) {
@@ -522,12 +484,6 @@ function SetTrackArt({ track, index, isLatest, isPlaying, isAnchor, onRemove, on
 }
 
 // ── Suggestion / search result row ─────────────────────────────────────────
-const IconEdit = () => (
-  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-  </svg>
-);
-
 const TrackRow = React.memo(function TrackRow({ track, isPlaying, isAnchor, onAdd, onPlay, onFindSimilar, onEdit, onSelectAnchor, isStarter = false, index = 0 }) {
   const name = track.name || track.title || 'Unknown';
   return (

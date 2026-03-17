@@ -12,36 +12,24 @@ Run: python populate_album_art_urls.py
 """
 
 import os
-import unicodedata
-from supabase import create_client
+import sys
+from pathlib import Path
 from dotenv import load_dotenv
+
+sys.path.insert(0, str(Path(__file__).parent))
+from shared_utils import make_cover_filename, get_supabase
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = get_supabase()
 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
 COVERS_BASE = f"{SUPABASE_URL}/storage/v1/object/public/album-covers/"
 
 
 def create_safe_filename(artist: str, title: str) -> str:
-    """Build a safe ASCII storage filename from artist + title.
-
-    MUST stay identical to create_safe_filename() in upload_album_covers.py,
-    _make_cover_filename() in ingest_music.py,
-    AND makeSupabaseCoverUrl() in Frontend/src/utils/coverUrl.js.
-    """
-    raw = f"{artist}_{title}"
-    # 1. NFKD decompose (é → e + combining accent) then drop all non-ASCII
-    raw = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii")
-    # 2. Lowercase
-    raw = raw.lower()
-    # 3. Replace non-alnum (except - _) with _
-    raw = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in raw)
-    # 4. Collapse consecutive underscores, truncate to 150
-    raw = "_".join(filter(None, raw.split("_")))
-    return raw[:150]
+    """Build a safe ASCII storage filename. Delegates to shared_utils."""
+    return make_cover_filename(artist, title, ext="")
 
 
 def main():

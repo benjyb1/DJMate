@@ -106,6 +106,9 @@ rich==14.3.2
 rpds-py==0.30.0
 scikit-learn==1.8.0
 scipy==1.17.0
+# Audio analysis + ML dimensionality reduction
+librosa==0.10.2.post1
+umap-learn==0.5.7
 setuptools==76.0.0
 six==1.17.0
 smmap==5.0.2

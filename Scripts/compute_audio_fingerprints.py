@@ -17,6 +17,7 @@ Usage:
 
 import os
 import json
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -24,14 +25,9 @@ from pathlib import Path
 import numpy as np
 import librosa
 import requests
-from supabase import create_client
-from dotenv import load_dotenv
 
-load_dotenv()
-
-# ── Config ────────────────────────────────────────────────────────────────────
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+sys.path.insert(0, str(Path(__file__).parent))
+from shared_utils import get_supabase
 
 SR        = 22050    # analysis sample rate (librosa default)
 N_FFT     = 2048     # FFT window size
@@ -119,10 +115,7 @@ def compute_mfcc_fingerprint(path: str) -> list[float] | None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise SystemExit("SUPABASE_URL / SUPABASE_KEY not set in .env")
-
-    sb   = create_client(SUPABASE_URL, SUPABASE_KEY)
+    sb = get_supabase()
     prog = load_progress()
     done_ids   = set(map(str, prog["done"]))
     failed_ids = set(map(str, prog["failed"]))

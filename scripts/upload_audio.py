@@ -1,16 +1,12 @@
 import os
 import json
-import unicodedata
+import sys
 from pathlib import Path
-from supabase import create_client
-from dotenv import load_dotenv
 
-load_dotenv()
+sys.path.insert(0, str(Path(__file__).parent))
+from shared_utils import get_supabase
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = get_supabase()
 BUCKET_NAME = "audio-files"
 PROGRESS_FILE = "upload_progress_audio.json"
 

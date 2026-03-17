@@ -14,13 +14,10 @@ from functools import lru_cache
 import logging
 from contextlib import asynccontextmanager
 
-from dotenv import load_dotenv
 from supabase import create_client, Client
 import asyncpg
 from redis import Redis
 import hashlib
-
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -187,11 +184,13 @@ class DatabaseManager:
         try:
             start_time = asyncio.get_event_loop().time()
 
-            response = self.client.table("tracks") \
-                .select("*, track_labels(semantic_tags, energy, vibe)") \
-                .eq("trackid", track_id) \
-                .single() \
+            response = await asyncio.to_thread(
+                lambda: self.client.table("tracks")
+                .select("*, track_labels(semantic_tags, energy, vibe)")
+                .eq("trackid", track_id)
+                .single()
                 .execute()
+            )
 
             # Update metrics
             self.query_metrics['total_queries'] += 1
@@ -235,10 +234,12 @@ class DatabaseManager:
         uncached_tracks = {}
         if uncached_ids and self.client:
             try:
-                response = self.client.table("tracks") \
-                    .select("*, track_labels(semantic_tags, energy, vibe)") \
-                    .in_("trackid", uncached_ids) \
+                response = await asyncio.to_thread(
+                    lambda: self.client.table("tracks")
+                    .select("*, track_labels(semantic_tags, energy, vibe)")
+                    .in_("trackid", uncached_ids)
                     .execute()
+                )
 
                 for track_data in response.data or []:
                     structured_data = self._structure_track_data(track_data)
@@ -385,7 +386,9 @@ class DatabaseManager:
                 query = query.gte("track_labels.energy", energy_range[0]) \
                     .lte("track_labels.energy", energy_range[1])
 
-            response = query.limit(limit * 2).execute()  # Over-fetch for filtering
+            response = await asyncio.to_thread(
+                lambda: query.limit(limit * 2).execute()
+            )  # Over-fetch for filtering
 
             if not response.data:
                 return []
@@ -518,12 +521,12 @@ class DatabaseManager:
             vibe_overlap = len(query_vibes.intersection(track_vibes)) / len(query_vibes)
             score += vibe_overlap * 0.3
 
-        # Energy proximity score
+        # Energy proximity score (energy is 1-10 integer scale)
         energy_range = structured_query.get("energy_range")
         if energy_range and track.energy is not None:
             target_energy = sum(energy_range) / 2
             energy_diff = abs(track.energy - target_energy)
-            energy_score = max(0, 1 - energy_diff * 2)  # Normalize to 0-1
+            energy_score = max(0, 1 - energy_diff / 5)  # 5-point diff → score 0
             score += energy_score * 0.3
 
         return min(score, 1.0)  # Cap at 1.0
@@ -580,11 +583,13 @@ class DatabaseManager:
             return []
 
         try:
-            response = self.client.rpc('match_tracks', {
-                'query_embedding': query_embedding,
-                'match_threshold': threshold,
-                'match_count': limit
-            }).execute()
+            response = await asyncio.to_thread(
+                lambda: self.client.rpc('match_tracks', {
+                    'query_embedding': query_embedding,
+                    'match_threshold': threshold,
+                    'match_count': limit
+                }).execute()
+            )
 
             results = []
             for row in response.data or []:
@@ -640,11 +645,13 @@ class DatabaseManager:
             return []
 
         try:
-            response = self.client.rpc('match_tracks', {
-                'query_embedding': query_embedding,
-                'match_threshold': threshold,
-                'match_count': limit
-            }).execute()
+            response = await asyncio.to_thread(
+                lambda: self.client.rpc('match_tracks', {
+                    'query_embedding': query_embedding,
+                    'match_threshold': threshold,
+                    'match_count': limit
+                }).execute()
+            )
 
             results = []
             for row in response.data or []:
@@ -695,11 +702,13 @@ class DatabaseManager:
             return None
 
         try:
-            response = self.client.table("track_labels") \
-                .select("*") \
-                .eq("trackid", track_id) \
-                .single() \
+            response = await asyncio.to_thread(
+                lambda: self.client.table("track_labels")
+                .select("*")
+                .eq("trackid", track_id)
+                .single()
                 .execute()
+            )
             return response.data
         except Exception as e:
             logger.error(f"Error fetching track labels for {track_id}: {e}")
@@ -744,7 +753,9 @@ class DatabaseManager:
                     "new_value": json.dumps(new_value),
                 }
                 try:
-                    self.client.table("tag_corrections").insert(correction).execute()
+                    await asyncio.to_thread(
+                        lambda: self.client.table("tag_corrections").insert(correction).execute()
+                    )
                 except Exception as e:
                     # Table may not exist yet — warn but don't block the update
                     logger.warning(f"Failed to log tag correction: {e}")
@@ -755,7 +766,9 @@ class DatabaseManager:
             if field in updates:
                 payload[field] = updates[field]
 
-        self.client.table("track_labels").upsert(payload).execute()
+        await asyncio.to_thread(
+            lambda: self.client.table("track_labels").upsert(payload).execute()
+        )
 
         # 4. Invalidate cache for this track
         cache_key = self._cache_key("track", track_id=track_id)
@@ -775,9 +788,11 @@ class DatabaseManager:
             return {"semantic_tags": [], "vibes": []}
 
         try:
-            response = self.client.table("track_labels") \
-                .select("semantic_tags, vibe") \
+            response = await asyncio.to_thread(
+                lambda: self.client.table("track_labels")
+                .select("semantic_tags, vibe")
                 .execute()
+            )
 
             all_tags: set = set()
             all_vibes: set = set()
@@ -803,7 +818,9 @@ class DatabaseManager:
             return {"id": session_id, "name": name, "crates": []}
         try:
             payload = {"id": session_id, "name": name}
-            self.client.table("crate_sessions").insert(payload).execute()
+            await asyncio.to_thread(
+                lambda: self.client.table("crate_sessions").insert(payload).execute()
+            )
             return {"id": session_id, "name": name, "crates": []}
         except Exception as e:
             logger.warning(f"create_crate_session DB insert failed (table may not exist): {e}")
@@ -814,14 +831,18 @@ class DatabaseManager:
         if not self.client:
             return None
         try:
-            response = self.client.table("crate_sessions") \
+            response = await asyncio.to_thread(
+                lambda: self.client.table("crate_sessions")
                 .select("*").eq("id", session_id).single().execute()
+            )
             if not response.data:
                 return None
             # Fetch all crates for this session
-            crates_resp = self.client.table("crates") \
-                .select("*").eq("session_id", session_id) \
+            crates_resp = await asyncio.to_thread(
+                lambda: self.client.table("crates")
+                .select("*").eq("session_id", session_id)
                 .order("position").execute()
+            )
             crates = []
             for c in (crates_resp.data or []):
                 crate = await self.get_crate(c["id"])
@@ -852,17 +873,24 @@ class DatabaseManager:
                 "dominant_key": crate_data.get("metadata", {}).get("dominant_key"),
                 "dominant_tags": crate_data.get("metadata", {}).get("dominant_tags", []),
             }
-            self.client.table("crates").upsert(crate_row).execute()
+            await asyncio.to_thread(
+                lambda: self.client.table("crates").upsert(crate_row).execute()
+            )
 
-            # Save crate tracks
+            # Save crate tracks (bulk upsert)
             tracks = crate_data.get("tracks", [])
-            for i, t in enumerate(tracks):
-                track_row = {
-                    "crate_id": crate_data["id"],
-                    "trackid": t.get("trackid") or t.get("id"),
-                    "position": i,
-                }
-                self.client.table("crate_tracks").upsert(track_row).execute()
+            if tracks:
+                track_rows = [
+                    {
+                        "crate_id": crate_data["id"],
+                        "trackid": t.get("trackid") or t.get("id"),
+                        "position": i,
+                    }
+                    for i, t in enumerate(tracks)
+                ]
+                await asyncio.to_thread(
+                    lambda: self.client.table("crate_tracks").upsert(track_rows).execute()
+                )
 
             return crate_data
         except Exception as e:
@@ -874,16 +902,20 @@ class DatabaseManager:
         if not self.client:
             return None
         try:
-            resp = self.client.table("crates") \
+            resp = await asyncio.to_thread(
+                lambda: self.client.table("crates")
                 .select("*").eq("id", crate_id).single().execute()
+            )
             if not resp.data:
                 return None
 
             # Get tracks
-            tracks_resp = self.client.table("crate_tracks") \
-                .select("trackid, position") \
-                .eq("crate_id", crate_id) \
+            tracks_resp = await asyncio.to_thread(
+                lambda: self.client.table("crate_tracks")
+                .select("trackid, position")
+                .eq("crate_id", crate_id)
                 .order("position").execute()
+            )
 
             track_ids = [r["trackid"] for r in (tracks_resp.data or [])]
             tracks = await self.get_tracks_by_ids(track_ids)
@@ -921,12 +953,18 @@ class DatabaseManager:
             return False
         try:
             # Delete existing tracks
-            self.client.table("crate_tracks").delete().eq("crate_id", crate_id).execute()
-            # Insert new tracks
-            for i, tid in enumerate(track_ids):
-                self.client.table("crate_tracks").insert({
-                    "crate_id": crate_id, "trackid": tid, "position": i,
-                }).execute()
+            await asyncio.to_thread(
+                lambda: self.client.table("crate_tracks").delete().eq("crate_id", crate_id).execute()
+            )
+            # Insert new tracks (bulk)
+            if track_ids:
+                rows = [
+                    {"crate_id": crate_id, "trackid": tid, "position": i}
+                    for i, tid in enumerate(track_ids)
+                ]
+                await asyncio.to_thread(
+                    lambda: self.client.table("crate_tracks").insert(rows).execute()
+                )
             return True
         except Exception as e:
             logger.warning(f"update_crate_tracks failed: {e}")
@@ -938,13 +976,19 @@ class DatabaseManager:
             return False
         try:
             # Delete child crates first (recursive)
-            children = self.client.table("crates") \
+            children = await asyncio.to_thread(
+                lambda: self.client.table("crates")
                 .select("id").eq("parent_crate_id", crate_id).execute()
+            )
             for child in (children.data or []):
                 await self.delete_crate(child["id"])
             # Delete tracks and crate
-            self.client.table("crate_tracks").delete().eq("crate_id", crate_id).execute()
-            self.client.table("crates").delete().eq("id", crate_id).execute()
+            await asyncio.to_thread(
+                lambda: self.client.table("crate_tracks").delete().eq("crate_id", crate_id).execute()
+            )
+            await asyncio.to_thread(
+                lambda: self.client.table("crates").delete().eq("id", crate_id).execute()
+            )
             return True
         except Exception as e:
             logger.warning(f"delete_crate failed: {e}")
@@ -958,11 +1002,13 @@ class DatabaseManager:
             return []
         try:
             cutoff = (datetime.utcnow() - timedelta(days=since_days)).isoformat()
-            response = self.client.table("tag_corrections") \
-                .select("*") \
-                .gte("created_at", cutoff) \
-                .order("created_at", desc=True) \
+            response = await asyncio.to_thread(
+                lambda: self.client.table("tag_corrections")
+                .select("*")
+                .gte("created_at", cutoff)
+                .order("created_at", desc=True)
                 .execute()
+            )
             return response.data or []
         except Exception as e:
             logger.warning(f"get_recent_corrections failed (table may not exist): {e}")
@@ -974,11 +1020,13 @@ class DatabaseManager:
             return []
         try:
             # Join tracks (for embedding) with track_labels (for tag_source filter)
-            response = self.client.table("tracks") \
-                .select("trackid, embedding, track_labels!inner(tag_source)") \
-                .not_.is_("embedding", "null") \
-                .eq("track_labels.tag_source", "auto") \
+            response = await asyncio.to_thread(
+                lambda: self.client.table("tracks")
+                .select("trackid, embedding, track_labels!inner(tag_source)")
+                .not_.is_("embedding", "null")
+                .eq("track_labels.tag_source", "auto")
                 .execute()
+            )
             return response.data or []
         except Exception as e:
             logger.warning(f"get_auto_tagged_tracks failed (table may not exist): {e}")
@@ -989,11 +1037,13 @@ class DatabaseManager:
         if not self.client:
             return
         try:
-            self.client.table("correction_propagation_log").insert({
-                "corrections_applied": corrections_applied,
-                "tracks_updated": tracks_updated,
-                "propagated_at": datetime.utcnow().isoformat(),
-            }).execute()
+            await asyncio.to_thread(
+                lambda: self.client.table("correction_propagation_log").insert({
+                    "corrections_applied": corrections_applied,
+                    "tracks_updated": tracks_updated,
+                    "propagated_at": datetime.utcnow().isoformat(),
+                }).execute()
+            )
         except Exception as e:
             logger.warning(f"log_propagation failed (table may not exist): {e}")
 
@@ -1002,11 +1052,13 @@ class DatabaseManager:
         if not self.client:
             return None
         try:
-            response = self.client.table("correction_propagation_log") \
-                .select("*") \
-                .order("propagated_at", desc=True) \
-                .limit(1) \
+            response = await asyncio.to_thread(
+                lambda: self.client.table("correction_propagation_log")
+                .select("*")
+                .order("propagated_at", desc=True)
+                .limit(1)
                 .execute()
+            )
             rows = response.data or []
             if not rows:
                 return {"last_propagation": None, "total_propagated": 0}
@@ -1014,9 +1066,11 @@ class DatabaseManager:
             latest = rows[0]
 
             # Sum total propagated tracks across all runs
-            all_resp = self.client.table("correction_propagation_log") \
-                .select("tracks_updated") \
+            all_resp = await asyncio.to_thread(
+                lambda: self.client.table("correction_propagation_log")
+                .select("tracks_updated")
                 .execute()
+            )
             total = sum(r.get("tracks_updated", 0) for r in (all_resp.data or []))
 
             return {
@@ -1039,7 +1093,9 @@ class DatabaseManager:
             payload = {"id": playlist_id, "name": name, "source": source}
             if source_path:
                 payload["source_path"] = source_path
-            self.client.table("playlists").insert(payload).execute()
+            await asyncio.to_thread(
+                lambda: self.client.table("playlists").insert(payload).execute()
+            )
             return {"id": playlist_id, "name": name, "source": source}
         except Exception as e:
             logger.warning(f"create_playlist failed (table may not exist): {e}")
@@ -1050,20 +1106,25 @@ class DatabaseManager:
         if not self.client:
             return []
         try:
-            response = self.client.table("playlists") \
-                .select("*") \
-                .order("created_at", desc=True) \
+            response = await asyncio.to_thread(
+                lambda: self.client.table("playlists")
+                .select("*")
+                .order("created_at", desc=True)
                 .execute()
+            )
 
             playlists = []
             for row in response.data or []:
                 # Get track count
                 count = 0
                 try:
-                    count_resp = self.client.table("playlist_tracks") \
-                        .select("id", count="exact") \
-                        .eq("playlist_id", row["id"]) \
+                    pid = row["id"]
+                    count_resp = await asyncio.to_thread(
+                        lambda pid=pid: self.client.table("playlist_tracks")
+                        .select("id", count="exact")
+                        .eq("playlist_id", pid)
                         .execute()
+                    )
                     count = count_resp.count if hasattr(count_resp, "count") and count_resp.count else 0
                 except Exception:
                     pass
@@ -1086,20 +1147,24 @@ class DatabaseManager:
             return None
         try:
             # Get playlist metadata
-            resp = self.client.table("playlists") \
-                .select("*") \
-                .eq("id", playlist_id) \
-                .single() \
+            resp = await asyncio.to_thread(
+                lambda: self.client.table("playlists")
+                .select("*")
+                .eq("id", playlist_id)
+                .single()
                 .execute()
+            )
             if not resp.data:
                 return None
 
             # Get ordered track IDs
-            tracks_resp = self.client.table("playlist_tracks") \
-                .select("trackid, position") \
-                .eq("playlist_id", playlist_id) \
-                .order("position") \
+            tracks_resp = await asyncio.to_thread(
+                lambda: self.client.table("playlist_tracks")
+                .select("trackid, position")
+                .eq("playlist_id", playlist_id)
+                .order("position")
                 .execute()
+            )
 
             track_ids = [r["trackid"] for r in (tracks_resp.data or [])]
             tracks = await self.get_tracks_by_ids(track_ids)
@@ -1134,17 +1199,21 @@ class DatabaseManager:
             return False
         try:
             # Delete existing tracks
-            self.client.table("playlist_tracks") \
-                .delete() \
-                .eq("playlist_id", playlist_id) \
+            await asyncio.to_thread(
+                lambda: self.client.table("playlist_tracks")
+                .delete()
+                .eq("playlist_id", playlist_id)
                 .execute()
-            # Insert new tracks with position
-            for i, tid in enumerate(track_ids):
-                self.client.table("playlist_tracks").insert({
-                    "playlist_id": playlist_id,
-                    "trackid": tid,
-                    "position": i,
-                }).execute()
+            )
+            # Insert new tracks with position (bulk)
+            if track_ids:
+                rows = [
+                    {"playlist_id": playlist_id, "trackid": tid, "position": i}
+                    for i, tid in enumerate(track_ids)
+                ]
+                await asyncio.to_thread(
+                    lambda: self.client.table("playlist_tracks").insert(rows).execute()
+                )
             return True
         except Exception as e:
             logger.warning(f"update_playlist_tracks failed: {e}")
@@ -1156,15 +1225,19 @@ class DatabaseManager:
             return False
         try:
             # Delete track associations first
-            self.client.table("playlist_tracks") \
-                .delete() \
-                .eq("playlist_id", playlist_id) \
+            await asyncio.to_thread(
+                lambda: self.client.table("playlist_tracks")
+                .delete()
+                .eq("playlist_id", playlist_id)
                 .execute()
+            )
             # Delete playlist
-            self.client.table("playlists") \
-                .delete() \
-                .eq("id", playlist_id) \
+            await asyncio.to_thread(
+                lambda: self.client.table("playlists")
+                .delete()
+                .eq("id", playlist_id)
                 .execute()
+            )
             return True
         except Exception as e:
             logger.warning(f"delete_playlist failed: {e}")
@@ -1175,10 +1248,12 @@ class DatabaseManager:
         if not self.client:
             return False
         try:
-            self.client.table("playlists") \
-                .update({"name": new_name}) \
-                .eq("id", playlist_id) \
+            await asyncio.to_thread(
+                lambda: self.client.table("playlists")
+                .update({"name": new_name})
+                .eq("id", playlist_id)
                 .execute()
+            )
             return True
         except Exception as e:
             logger.warning(f"rename_playlist failed (table may not exist): {e}")
@@ -1189,20 +1264,25 @@ class DatabaseManager:
         if not self.client:
             return []
         try:
-            response = self.client.table("playlists") \
-                .select("*") \
-                .order("created_at") \
+            response = await asyncio.to_thread(
+                lambda: self.client.table("playlists")
+                .select("*")
+                .order("created_at")
                 .execute()
+            )
 
             playlists = []
             for row in response.data or []:
                 # Get track count
                 count = 0
                 try:
-                    count_resp = self.client.table("playlist_tracks") \
-                        .select("id", count="exact") \
-                        .eq("playlist_id", row["id"]) \
+                    pid = row["id"]
+                    count_resp = await asyncio.to_thread(
+                        lambda pid=pid: self.client.table("playlist_tracks")
+                        .select("id", count="exact")
+                        .eq("playlist_id", pid)
                         .execute()
+                    )
                     count = count_resp.count if hasattr(count_resp, "count") and count_resp.count else 0
                 except Exception:
                     pass
@@ -1225,9 +1305,11 @@ class DatabaseManager:
         if not self.client:
             return []
         try:
-            response = self.client.table("tracks") \
-                .select("trackid, title, artist, bpm, key, filepath, track_labels(energy, semantic_tags, vibe)") \
+            response = await asyncio.to_thread(
+                lambda: self.client.table("tracks")
+                .select("trackid, title, artist, bpm, key, filepath, track_labels(energy, semantic_tags, vibe)")
                 .execute()
+            )
 
             tracks = []
             for row in response.data or []:
@@ -1256,24 +1338,32 @@ class DatabaseManager:
             # Get current max position
             max_pos = -1
             try:
-                pos_resp = self.client.table("playlist_tracks") \
-                    .select("position") \
-                    .eq("playlist_id", playlist_id) \
-                    .order("position", desc=True) \
-                    .limit(1) \
+                pos_resp = await asyncio.to_thread(
+                    lambda: self.client.table("playlist_tracks")
+                    .select("position")
+                    .eq("playlist_id", playlist_id)
+                    .order("position", desc=True)
+                    .limit(1)
                     .execute()
+                )
                 if pos_resp.data:
                     max_pos = pos_resp.data[0]["position"]
             except Exception:
                 pass
 
-            # Insert new tracks starting at max_position + 1
-            for i, tid in enumerate(track_ids):
-                self.client.table("playlist_tracks").insert({
-                    "playlist_id": playlist_id,
-                    "trackid": tid,
-                    "position": max_pos + 1 + i,
-                }).execute()
+            # Insert new tracks starting at max_position + 1 (bulk)
+            if track_ids:
+                rows = [
+                    {
+                        "playlist_id": playlist_id,
+                        "trackid": tid,
+                        "position": max_pos + 1 + i,
+                    }
+                    for i, tid in enumerate(track_ids)
+                ]
+                await asyncio.to_thread(
+                    lambda: self.client.table("playlist_tracks").insert(rows).execute()
+                )
             return True
         except Exception as e:
             logger.warning(f"add_tracks_to_playlist failed (table may not exist): {e}")
@@ -1285,11 +1375,13 @@ class DatabaseManager:
             return False
         try:
             for tid in track_ids:
-                self.client.table("playlist_tracks") \
-                    .delete() \
-                    .eq("playlist_id", playlist_id) \
-                    .eq("trackid", tid) \
+                await asyncio.to_thread(
+                    lambda tid=tid: self.client.table("playlist_tracks")
+                    .delete()
+                    .eq("playlist_id", playlist_id)
+                    .eq("trackid", tid)
                     .execute()
+                )
             return True
         except Exception as e:
             logger.warning(f"remove_tracks_from_playlist failed (table may not exist): {e}")

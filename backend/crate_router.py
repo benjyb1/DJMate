@@ -24,29 +24,23 @@ import uuid
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_db = None
 _generator = None
 _bridge_analyzer = None
 
-def _get_db():
-    global _db
-    if _db is None:
-        from backend.data.db_interface import DatabaseManager
-        _db = DatabaseManager(enable_caching=True, pool_size=10)
-    return _db
+from backend.dependencies import get_db
 
 def _get_generator():
     global _generator
     if _generator is None:
         from backend.crate_generator import CrateGenerator
-        _generator = CrateGenerator(_get_db())
+        _generator = CrateGenerator(get_db())
     return _generator
 
 def _get_bridge_analyzer():
     global _bridge_analyzer
     if _bridge_analyzer is None:
         from backend.crate_generator import BridgeAnalyzer
-        _bridge_analyzer = BridgeAnalyzer(_get_db())
+        _bridge_analyzer = BridgeAnalyzer(get_db())
     return _bridge_analyzer
 
 # ── Request/Response models ──
@@ -94,20 +88,20 @@ class UpdateTracksRequest(BaseModel):
 async def create_session(req: CreateSessionRequest):
     """Create a new crate-building session."""
     try:
-        db = _get_db()
+        db = get_db()
         session_id = str(uuid.uuid4())
         # Store session in DB (if table exists) or in-memory
         session = await db.create_crate_session(session_id, req.name)
         return SessionResponse(id=session_id, name=req.name, crates=[])
     except Exception as e:
-        logger.error(f"Create session error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Create session error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/session/{session_id}", response_model=SessionResponse)
 async def get_session(session_id: str):
     """Get full crate tree for a session."""
     try:
-        db = _get_db()
+        db = get_db()
         session = await db.get_crate_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -115,8 +109,8 @@ async def get_session(session_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Get session error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Get session error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/generate", response_model=CrateResponse)
 async def generate_crate(req: GenerateCrateRequest):
@@ -125,7 +119,7 @@ async def generate_crate(req: GenerateCrateRequest):
     then the crate generator to assemble cohesive tracks.
     """
     try:
-        db = _get_db()
+        db = get_db()
         generator = _get_generator()
 
         # Step 1: Interpret the prompt via the LLM
@@ -185,14 +179,14 @@ async def generate_crate(req: GenerateCrateRequest):
         return CrateResponse(**crate_data)
 
     except Exception as e:
-        logger.error(f"Generate crate error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Generate crate error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/bridge", response_model=BridgeResponse)
 async def analyze_bridge(req: BridgeRequest):
     """Analyze the transition gap between two crates."""
     try:
-        db = _get_db()
+        db = get_db()
         bridge_analyzer = _get_bridge_analyzer()
 
         crate_a = await db.get_crate(req.crate_a_id)
@@ -210,28 +204,28 @@ async def analyze_bridge(req: BridgeRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Bridge analysis error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Bridge analysis error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/{crate_id}/tracks")
 async def update_crate_tracks(crate_id: str, req: UpdateTracksRequest):
     """Update the track list for a crate."""
     try:
-        db = _get_db()
+        db = get_db()
         await db.update_crate_tracks(crate_id, req.track_ids)
         crate = await db.get_crate(crate_id)
         return crate or {"id": crate_id, "tracks": req.track_ids}
     except Exception as e:
-        logger.error(f"Update crate tracks error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Update crate tracks error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.delete("/{crate_id}")
 async def delete_crate(crate_id: str):
     """Delete a crate and all its children."""
     try:
-        db = _get_db()
+        db = get_db()
         await db.delete_crate(crate_id)
         return {"status": "deleted", "id": crate_id}
     except Exception as e:
-        logger.error(f"Delete crate error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Delete crate error")
+        raise HTTPException(status_code=500, detail="Internal server error")

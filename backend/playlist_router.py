@@ -27,17 +27,9 @@ from backend.rekordbox_parser import parse_xml, match_tracks, generate_export_xm
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── Lazy singleton (initialised on first request) ────────────────────────────
+# ── Shared singleton ─────────────────────────────────────────────────────────
 
-_db = None
-
-
-def _get_db():
-    global _db
-    if _db is None:
-        from backend.data.db_interface import DatabaseManager
-        _db = DatabaseManager(enable_caching=True, pool_size=10)
-    return _db
+from backend.dependencies import get_db
 
 
 # ── Request / Response models ────────────────────────────────────────────────
@@ -112,7 +104,7 @@ class ExportFoldersRequest(BaseModel):
 async def import_rekordbox(req: ImportRequest):
     """Parse Rekordbox XML, fuzzy-match tracks to DB, and create a playlist."""
     try:
-        db = _get_db()
+        db = get_db()
 
         # Parse the XML
         parsed = parse_xml(req.xml_content)
@@ -169,18 +161,18 @@ async def import_rekordbox(req: ImportRequest):
             ],
         )
 
-    except ET_ParseError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid XML: {e}")
+    except ET_ParseError:
+        raise HTTPException(status_code=400, detail="Invalid XML format")
     except Exception as e:
-        logger.error(f"Import error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Import error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("", response_model=List[PlaylistSummary])
 async def list_playlists():
     """List all playlists."""
     try:
-        db = _get_db()
+        db = get_db()
         playlists = await db.get_playlists()
         return [
             PlaylistSummary(
@@ -193,15 +185,15 @@ async def list_playlists():
             for p in playlists
         ]
     except Exception as e:
-        logger.error(f"List playlists error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("List playlists error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/create")
 async def create_playlist(req: CreatePlaylistRequest):
     """Create an empty playlist with optional parent_id and description."""
     try:
-        db = _get_db()
+        db = get_db()
         playlist_id = str(uuid.uuid4())
         payload = {"id": playlist_id, "name": req.name, "source": "manual"}
         if req.parent_id:
@@ -215,39 +207,39 @@ async def create_playlist(req: CreatePlaylistRequest):
 
         return {"id": playlist_id, "name": req.name, "parent_id": req.parent_id, "description": req.description}
     except Exception as e:
-        logger.error(f"Create playlist error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Create playlist error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/tree")
 async def get_playlist_tree():
     """Get all playlists as a flat list with track counts (for tree rendering)."""
     try:
-        db = _get_db()
+        db = get_db()
         tree = await db.get_playlist_tree()
         return tree
     except Exception as e:
-        logger.error(f"Get playlist tree error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Get playlist tree error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/pool")
 async def get_track_pool():
     """Get all tracks with labels (lightweight, no embeddings)."""
     try:
-        db = _get_db()
+        db = get_db()
         pool = await db.get_track_pool()
         return pool
     except Exception as e:
-        logger.error(f"Get track pool error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Get track pool error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/export-folders")
 async def export_folders(req: ExportFoldersRequest):
     """Export playlists as folders with copied audio files."""
     try:
-        db = _get_db()
+        db = get_db()
         all_filepaths = []
         playlist_data = []
 
@@ -321,8 +313,8 @@ async def export_folders(req: ExportFoldersRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Export folders error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Export folders error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 class OrganizeRequest(BaseModel):
@@ -333,7 +325,7 @@ class OrganizeRequest(BaseModel):
 async def organize_playlists(req: OrganizeRequest):
     """Use the LLM to interpret a natural-language playlist command and execute it."""
     try:
-        db = _get_db()
+        db = get_db()
 
         # 1. Existing playlists
         existing_playlists = await db.get_playlist_tree()
@@ -410,8 +402,8 @@ async def organize_playlists(req: OrganizeRequest):
         }
 
     except Exception as e:
-        logger.error(f"Organize playlists error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Organize playlists error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 class SuggestTracksRequest(BaseModel):
@@ -431,7 +423,7 @@ async def suggest_tracks(req: SuggestTracksRequest):
         message: summary text
     """
     try:
-        db = _get_db()
+        db = get_db()
 
         # 1. Existing playlists for context
         existing_playlists = await db.get_playlist_tree()
@@ -530,15 +522,15 @@ async def suggest_tracks(req: SuggestTracksRequest):
         }
 
     except Exception as e:
-        logger.error(f"Suggest tracks error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Suggest tracks error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/{playlist_id}", response_model=PlaylistDetail)
 async def get_playlist(playlist_id: str):
     """Get a playlist with its tracks."""
     try:
-        db = _get_db()
+        db = get_db()
         playlist = await db.get_playlist(playlist_id)
         if not playlist:
             raise HTTPException(status_code=404, detail="Playlist not found")
@@ -546,15 +538,15 @@ async def get_playlist(playlist_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Get playlist error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Get playlist error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/{playlist_id}/tracks", response_model=PlaylistDetail)
 async def update_playlist_tracks(playlist_id: str, req: UpdateTracksRequest):
     """Reorder, add, or remove tracks in a playlist."""
     try:
-        db = _get_db()
+        db = get_db()
 
         # Verify playlist exists
         playlist = await db.get_playlist(playlist_id)
@@ -570,15 +562,15 @@ async def update_playlist_tracks(playlist_id: str, req: UpdateTracksRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Update playlist tracks error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Update playlist tracks error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/{playlist_id}/suggest", response_model=SuggestResponse)
 async def suggest_tracks(playlist_id: str, req: SuggestRequest):
     """Use the LLM to suggest tracks that fit the playlist's vibe."""
     try:
-        db = _get_db()
+        db = get_db()
 
         playlist = await db.get_playlist(playlist_id)
         if not playlist:
@@ -635,15 +627,15 @@ async def suggest_tracks(playlist_id: str, req: SuggestRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Suggest tracks error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Suggest tracks error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/{playlist_id}/export")
 async def export_playlist(playlist_id: str):
     """Export a playlist as Rekordbox XML."""
     try:
-        db = _get_db()
+        db = get_db()
 
         playlist = await db.get_playlist(playlist_id)
         if not playlist:
@@ -665,15 +657,15 @@ async def export_playlist(playlist_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Export playlist error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Export playlist error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/{playlist_id}")
 async def delete_playlist(playlist_id: str):
     """Delete a playlist and its track associations."""
     try:
-        db = _get_db()
+        db = get_db()
         success = await db.delete_playlist(playlist_id)
         if not success:
             raise HTTPException(status_code=404, detail="Playlist not found or delete failed")
@@ -681,15 +673,15 @@ async def delete_playlist(playlist_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Delete playlist error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Delete playlist error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/{playlist_id}/rename")
 async def rename_playlist(playlist_id: str, req: RenamePlaylistRequest):
     """Rename a playlist."""
     try:
-        db = _get_db()
+        db = get_db()
         success = await db.rename_playlist(playlist_id, req.name)
         if not success:
             raise HTTPException(status_code=404, detail="Playlist not found or rename failed")
@@ -697,15 +689,15 @@ async def rename_playlist(playlist_id: str, req: RenamePlaylistRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Rename playlist error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Rename playlist error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/{playlist_id}/add-tracks")
 async def add_tracks(playlist_id: str, req: AddTracksRequest):
     """Add tracks to a playlist without removing existing ones."""
     try:
-        db = _get_db()
+        db = get_db()
         success = await db.add_tracks_to_playlist(playlist_id, req.track_ids)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to add tracks")
@@ -713,15 +705,15 @@ async def add_tracks(playlist_id: str, req: AddTracksRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Add tracks error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Add tracks error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/{playlist_id}/remove-tracks")
 async def remove_tracks(playlist_id: str, req: RemoveTracksRequest):
     """Remove specific tracks from a playlist."""
     try:
-        db = _get_db()
+        db = get_db()
         success = await db.remove_tracks_from_playlist(playlist_id, req.track_ids)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to remove tracks")
@@ -729,8 +721,8 @@ async def remove_tracks(playlist_id: str, req: RemoveTracksRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Remove tracks error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Remove tracks error")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

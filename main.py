@@ -4,33 +4,65 @@ Run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 '''
 
-from fastapi import FastAPI, HTTPException, Depends
+from dotenv import load_dotenv
+load_dotenv()
+
+from contextlib import asynccontextmanager
+from pathlib import Path
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-import asyncio
 import os
 import json
+import logging
 import numpy as np
 
 from backend.llm_interpreter import SemanticInterpreter
 from backend.reccomender import DJRecommendationEngine
-from backend.data.db_interface import DatabaseManager
+from backend.dependencies import get_db
 from backend.chat_router import router as chat_router
 from backend.tag_router import router as tag_router
 from backend.crate_router import router as crate_router
 from backend.playlist_router import router as playlist_router
 from backend.ingest_router import router as ingest_router
-app = FastAPI(title="AI DJ Curation API", version="2.0.0")
+
+logger = logging.getLogger(__name__)
+
+db_manager = get_db()
+
+
+@asynccontextmanager
+async def lifespan(app):
+    logger.info("DJMate API starting up...")
+    try:
+        test = db_manager.client.table("tracks").select("trackid").limit(1).execute()
+        logger.info(f"Database connection OK")
+    except Exception as e:
+        logger.error(f"Database startup check failed: {e}")
+    yield
+    logger.info("DJMate API shutting down...")
+    if hasattr(db_manager, 'pg_pool') and db_manager.pg_pool:
+        await db_manager.pg_pool.close()
+    if hasattr(db_manager, 'redis_client') and db_manager.redis_client:
+        try:
+            db_manager.redis_client.close()
+        except Exception:
+            pass
+
+
+app = FastAPI(title="AI DJ Curation API", version="2.0.0", lifespan=lifespan)
 
 # Configure CORS
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 app.include_router(chat_router, prefix="/chat", tags=["chat"])
 app.include_router(tag_router, prefix="/tags", tags=["tags"])
@@ -45,27 +77,23 @@ class NaturalLanguageQuery(BaseModel):
     session_id: Optional[str] = None
 
 class StructuredQuery(BaseModel):
-    tags: List[str] = []
-    vibe_descriptors: List[str] = []
-    bpm_range: Optional[tuple[int, int]] = None
-    energy_range: Optional[tuple[float, float]] = None
-    key_compatibility: Optional[str] = None
-    direction: Optional[str] = None
-    exclude_tracks: List[str] = []
+    genres: Optional[List[str]] = None
+    vibes: Optional[List[str]] = None
+    energy: Optional[float] = None
+    bpm_range: Optional[List[float]] = None
+    track_count: Optional[int] = 10
 
 class CrateOperation(BaseModel):
     session_id: str
     tracks: List[str]
-    sequence_order: List[int]
-    metadata: Optional[Dict[str, Any]] = None
+    sequence_order: Optional[List[str]] = None
 
 # ── Singletons ────────────────────────────────────────────────────────────────
 
-db_manager = DatabaseManager()
-embedding_index = None
 semantic_interpreter = SemanticInterpreter(
     supabase_client=db_manager.client
 )
+
 recommendation_engine = DJRecommendationEngine(
     db_interface=db_manager,
     embedding_index=None
@@ -85,8 +113,8 @@ async def root():
 
 @app.get("/tracks")
 async def get_all_tracks(
-        limit: int = 100,
-        offset: int = 0
+        limit: int = Query(100, ge=1, le=500),
+        offset: int = Query(0, ge=0),
 ):
     """
     Get tracks with PRECOMPUTED UMAP coordinates for 3D visualization.
@@ -170,7 +198,8 @@ async def get_all_tracks(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch tracks: {str(e)}")
+        logger.exception("Failed to fetch tracks")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.get("/tracks/resolve")
@@ -214,7 +243,7 @@ async def resolve_track(q: str):
 
 
 @app.get("/tracks/{track_id}/neighbors")
-async def get_track_neighbors(track_id: str, limit: int = 8):
+async def get_track_neighbors(track_id: str, limit: int = Query(8, ge=1, le=100)):
     """
     Similarity edges for click-to-edges feature in the 3D cloud.
     Returns the top-N most similar tracks to use as edge targets.
@@ -252,7 +281,8 @@ async def get_track_neighbors(track_id: str, limit: int = 8):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch neighbors: {str(e)}")
+        logger.exception("Failed to fetch neighbors")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.get("/tracks/{track_id}/audio")
@@ -266,26 +296,32 @@ async def get_track_audio(track_id: str):
         if not filepath:
             raise HTTPException(status_code=404, detail="No filepath for this track")
 
-        if not os.path.isfile(filepath):
-            raise HTTPException(status_code=404, detail="Audio file not found on disk")
+        # Path traversal protection
+        VALID_AUDIO_EXTS = {'.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg', '.aiff', '.aif', '.wma'}
+        resolved = Path(filepath).resolve()
+        if resolved.suffix.lower() not in VALID_AUDIO_EXTS:
+            raise HTTPException(status_code=400, detail="Invalid audio file type")
 
-        ext = os.path.splitext(filepath)[1].lower()
+        if not resolved.is_file():
+            raise HTTPException(status_code=404, detail="Audio file not found")
+
         media_types = {
             '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.flac': 'audio/flac',
             '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4',
-            '.aiff': 'audio/aiff', '.aif': 'audio/aiff',
+            '.aiff': 'audio/aiff', '.aif': 'audio/aiff', '.wma': 'audio/x-ms-wma',
         }
 
         return FileResponse(
-            path=filepath,
-            media_type=media_types.get(ext, 'audio/mpeg'),
-            filename=os.path.basename(filepath),
+            path=str(resolved),
+            media_type=media_types.get(resolved.suffix.lower(), 'audio/mpeg'),
+            filename=resolved.name,
         )
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to serve audio: {str(e)}")
+        logger.exception("Failed to serve audio")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 def _parse_embedding(emb):
@@ -305,7 +341,7 @@ def _parse_embedding(emb):
 
 
 @app.get("/tracks/{track_id}/similar")
-async def get_similar_tracks(track_id: str, limit: int = 7):
+async def get_similar_tracks(track_id: str, limit: int = Query(7, ge=1, le=100)):
     """
     Embedding-based similarity search — same logic as streamSimilar.py Tab 1.
     Returns tracks ranked by cosine similarity of their embeddings.
@@ -405,7 +441,8 @@ async def get_similar_tracks(track_id: str, limit: int = 7):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Similar search failed: {str(e)}")
+        logger.exception("Similar search failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ── AI endpoints ──────────────────────────────────────────────────────────────
@@ -429,7 +466,8 @@ async def parse_natural_language(query: NaturalLanguageQuery):
             "interpretation_notes": structured_query.get("notes", [])
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Intent parsing failed: {str(e)}")
+        logger.exception("Intent parsing failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.post("/intelligent-recommend")
@@ -454,7 +492,8 @@ async def intelligent_recommend(
             "pathway_visualization":recommendations.get("pathway_data", {})
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Recommendation failed: {str(e)}")
+        logger.exception("Recommendation failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.post("/crate/operations")
@@ -479,7 +518,8 @@ async def manage_crate(operation: CrateOperation):
             "sequence_score":       compatibility_issues.get("overall_score", 0.0)
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Crate operation failed: {str(e)}")
+        logger.exception("Crate operation failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.get("/visualization/pathway")
@@ -493,7 +533,8 @@ async def get_pathway_visualization(from_track: str, to_tracks: List[str]):
         )
         return pathway_data
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Pathway generation failed: {str(e)}")
+        logger.exception("Pathway generation failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 if __name__ == "__main__":

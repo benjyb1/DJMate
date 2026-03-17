@@ -8,7 +8,8 @@ Rekordbox XML format:
   - TRACK @Key references COLLECTION @TrackID
 """
 
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as SafeET
+from xml.etree.ElementTree import Element, SubElement, tostring, ParseError
 from typing import Dict, List, Any, Optional
 import logging
 import re
@@ -26,7 +27,7 @@ def parse_xml(file_content: str) -> dict:
           - collection: list of track dicts (trackid, name, artist, total_time, bpm, key, location)
           - playlists: list of {name, track_keys}
     """
-    root = ET.fromstring(file_content)
+    root = SafeET.fromstring(file_content)
 
     # Parse COLLECTION
     collection = []
@@ -115,13 +116,13 @@ def generate_export_xml(playlist_name: str, tracks: List[dict]) -> str:
     Returns:
         XML string in Rekordbox format
     """
-    root = ET.Element("DJ_PLAYLISTS", Version="1.0.0")
+    root = Element("DJ_PLAYLISTS", Version="1.0.0")
 
     # PRODUCT element
-    product = ET.SubElement(root, "PRODUCT", Name="DJMate", Version="1.0.0")
+    product = SubElement(root, "PRODUCT", Name="DJMate", Version="1.0.0")
 
     # COLLECTION
-    collection = ET.SubElement(root, "COLLECTION", Entries=str(len(tracks)))
+    collection = SubElement(root, "COLLECTION", Entries=str(len(tracks)))
     for i, track in enumerate(tracks):
         track_id = str(i + 1)
         attrs = {
@@ -132,26 +133,26 @@ def generate_export_xml(playlist_name: str, tracks: List[dict]) -> str:
             "AverageBpm": f"{float(track.get('bpm', 0) or 0):.2f}",
             "Tonality": track.get("key", ""),
         }
-        ET.SubElement(collection, "TRACK", **attrs)
+        SubElement(collection, "TRACK", **attrs)
 
     # PLAYLISTS
-    playlists = ET.SubElement(root, "PLAYLISTS")
-    root_node = ET.SubElement(playlists, "NODE", Type="0", Name="ROOT", Count=str(1))
-    playlist_node = ET.SubElement(
+    playlists = SubElement(root, "PLAYLISTS")
+    root_node = SubElement(playlists, "NODE", Type="0", Name="ROOT", Count=str(1))
+    playlist_node = SubElement(
         root_node, "NODE",
         Name=playlist_name, Type="0", KeyType="0", Entries=str(len(tracks)),
     )
     for i in range(len(tracks)):
-        ET.SubElement(playlist_node, "TRACK", Key=str(i + 1))
+        SubElement(playlist_node, "TRACK", Key=str(i + 1))
 
     # Serialize
-    return ET.tostring(root, encoding="unicode", xml_declaration=True)
+    return tostring(root, encoding="unicode", xml_declaration=True)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _walk_playlist_nodes(parent_el: ET.Element, playlists: list):
+def _walk_playlist_nodes(parent_el: Element, playlists: list):
     """Recursively walk NODE elements, collecting Type='0' playlists."""
     for node in parent_el.findall("NODE"):
         node_type = node.get("Type", "0")

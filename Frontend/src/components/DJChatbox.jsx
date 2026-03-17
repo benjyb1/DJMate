@@ -5,45 +5,13 @@ import { apiClient } from '../api/apiClient';
 import GlassPanel from './ui/GlassPanel';
 import TagEditor from './TagEditor';
 import { makeSupabaseCoverUrl } from '../utils/coverUrl';
+import { IconPlay, IconPause, IconSearch, IconClose, IconSend, IconUp, IconDown, IconEdit } from './icons';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-// ── SVG Icons ─────────────────────────────────────────────────────────────
-const IconPlayFill = () => (
-  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <polygon points="5,3 19,12 5,21" />
-  </svg>
-);
-const IconPauseFill = () => (
-  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" />
-  </svg>
-);
-const IconSend = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22,2 15,22 11,13 2,9" />
-  </svg>
-);
-const IconClose = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
-    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-  </svg>
-);
-const IconSearch = () => (
-  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
-    <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-  </svg>
-);
-const IconUp = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
-    <polyline points="18,15 12,9 6,15" />
-  </svg>
-);
-const IconDown = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
-    <polyline points="6,9 12,15 18,9" />
-  </svg>
-);
+// Aliases for DJChatbox (was IconPlayFill/IconPauseFill with size=10)
+const IconPlayFill = () => <IconPlay size={10} />;
+const IconPauseFill = () => <IconPause size={10} />;
 
 // ── Utility: direction delta between two tracks ────────────────────────────
 function describeDirection(source, candidate) {
@@ -116,8 +84,6 @@ function AlbumArt({ title, artist, directUrl, size = 48 }) {
     setErr(true);
   };
 
-  useEffect(() => {}, [title, artist]);
-
   if (url && !err) {
     return (
       <img
@@ -156,12 +122,6 @@ function AlbumArt({ title, artist, directUrl, size = 48 }) {
 }
 
 // ── Track card with framer-motion ──────────────────────────────────────────
-const IconEdit = () => (
-  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-  </svg>
-);
-
 const TrackCard = React.memo(function TrackCard({ rank, track, score, source, onClick, onFindSimilar, onEdit, isPlaying, onPlay, index = 0 }) {
   const direction = source ? describeDirection(source, track) : null;
 

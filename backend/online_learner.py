@@ -19,10 +19,7 @@ import logging
 from datetime import datetime, timedelta
 
 import numpy as np
-from dotenv import load_dotenv
 from sklearn.metrics.pairwise import cosine_similarity
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
