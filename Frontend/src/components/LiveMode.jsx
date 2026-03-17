@@ -164,7 +164,7 @@ function suggestDirectional(anchor, setList, allNodes) {
     return { ...n, _score, _dist: dist, _dot: dot };
   });
 
-  const anchorEnergy = parseFloat(anchor.energy ?? 0.5);
+  const anchorEnergy = parseFloat(anchor.energy ?? 5);
 
   const onTrajectory = scored
     .filter(n => n._score > 0.3)
@@ -199,10 +199,10 @@ function suggestDirectional(anchor, setList, allNodes) {
 
 function getDirectionReason(n, anchor) {
   const parts = [];
-  const nE = parseFloat(n.energy ?? 0.5);
-  const aE = parseFloat(anchor.energy ?? 0.5);
-  if (nE > aE + 0.1) parts.push('higher energy');
-  else if (nE < aE - 0.1) parts.push('lower energy');
+  const nE = parseFloat(n.energy ?? 5);
+  const aE = parseFloat(anchor.energy ?? 5);
+  if (nE > aE + 1) parts.push('higher energy');
+  else if (nE < aE - 1) parts.push('lower energy');
   const tags = Array.isArray(n.semanticTags) ? n.semanticTags : [];
   if (tags.length > 0) parts.push(tags[0]);
   if (n.key) parts.push(n.key);

@@ -20,7 +20,7 @@ import logging
 import numpy as np
 
 from backend.llm_interpreter import SemanticInterpreter
-from backend.reccomender import DJRecommendationEngine
+
 from backend.dependencies import get_db
 from backend.chat_router import router as chat_router
 from backend.tag_router import router as tag_router
@@ -76,27 +76,10 @@ class NaturalLanguageQuery(BaseModel):
     context: Optional[Dict[str, Any]] = None
     session_id: Optional[str] = None
 
-class StructuredQuery(BaseModel):
-    genres: Optional[List[str]] = None
-    vibes: Optional[List[str]] = None
-    energy: Optional[float] = None
-    bpm_range: Optional[List[float]] = None
-    track_count: Optional[int] = 10
-
-class CrateOperation(BaseModel):
-    session_id: str
-    tracks: List[str]
-    sequence_order: Optional[List[str]] = None
-
 # ── Singletons ────────────────────────────────────────────────────────────────
 
 semantic_interpreter = SemanticInterpreter(
     supabase_client=db_manager.client
-)
-
-recommendation_engine = DJRecommendationEngine(
-    db_interface=db_manager,
-    embedding_index=None
 )
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -467,73 +450,6 @@ async def parse_natural_language(query: NaturalLanguageQuery):
         }
     except Exception as e:
         logger.exception("Intent parsing failed")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-@app.post("/intelligent-recommend")
-async def intelligent_recommend(
-        query: StructuredQuery,
-        context_track_id: Optional[str] = None
-):
-    """Get recommendations using structured parameters with DJ logic."""
-    try:
-        recommendations = await recommendation_engine.get_intelligent_recommendations(
-            structured_query=query,
-            context_track_id=context_track_id,
-            apply_harmonic_weighting=True,
-            apply_energy_flow=True,
-            diversity_penalty=0.2
-        )
-
-        return {
-            "recommendations":      recommendations,
-            "reasoning":            recommendations.get("reasoning", {}),
-            "compatibility_scores": recommendations.get("compatibility", {}),
-            "pathway_visualization":recommendations.get("pathway_data", {})
-        }
-    except Exception as e:
-        logger.exception("Recommendation failed")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-@app.post("/crate/operations")
-async def manage_crate(operation: CrateOperation):
-    """Handle crate operations with compatibility validation."""
-    try:
-        compatibility_issues = await recommendation_engine.validate_sequence(
-            operation.tracks,
-            operation.sequence_order
-        )
-
-        await db_manager.update_crate(
-            session_id=operation.session_id,
-            tracks=operation.tracks,
-            sequence=operation.sequence_order,
-            validation_results=compatibility_issues
-        )
-
-        return {
-            "success":              True,
-            "compatibility_issues": compatibility_issues,
-            "sequence_score":       compatibility_issues.get("overall_score", 0.0)
-        }
-    except Exception as e:
-        logger.exception("Crate operation failed")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-@app.get("/visualization/pathway")
-async def get_pathway_visualization(from_track: str, to_tracks: List[str]):
-    """Generate 3D pathway data for visualization."""
-    try:
-        pathway_data = await recommendation_engine.generate_pathway_visualization(
-            source_track=from_track,
-            target_tracks=to_tracks,
-            max_intermediate_steps=3
-        )
-        return pathway_data
-    except Exception as e:
-        logger.exception("Pathway generation failed")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

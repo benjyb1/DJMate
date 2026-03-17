@@ -91,7 +91,7 @@ export default function CrateFlowDiagram({
         if (!pos) return null;
         const isSelected = selectedCrateId === c.id;
         const meta = c.metadata || {};
-        const energy = meta.avg_energy ?? 0.5;
+        const energy = meta.avg_energy ?? 5;
 
         return (
           <m.div
@@ -159,7 +159,7 @@ export default function CrateFlowDiagram({
               <div
                 style={{
                   height: '100%',
-                  width: `${energy * 100}%`,
+                  width: `${energy * 10}%`,
                   background: 'linear-gradient(90deg, #7c3aed, #00d4ff)',
                   borderRadius: 'var(--radius-pill)',
                   transition: 'width 300ms ease',

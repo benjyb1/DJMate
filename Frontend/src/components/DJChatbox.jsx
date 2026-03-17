@@ -16,10 +16,10 @@ const IconPauseFill = () => <IconPause size={10} />;
 // ── Utility: direction delta between two tracks ────────────────────────────
 function describeDirection(source, candidate) {
   const clues = [];
-  const sE = parseFloat(source?.energy  ?? 0.5);
-  const cE = parseFloat(candidate?.energy ?? 0.5);
-  if (cE - sE >  0.15) clues.push({ label: 'higher energy', color: '#ef4444' });
-  if (cE - sE < -0.15) clues.push({ label: 'lower energy',  color: '#0ea5e9' });
+  const sE = parseFloat(source?.energy  ?? 5);
+  const cE = parseFloat(candidate?.energy ?? 5);
+  if (cE - sE >  1.5) clues.push({ label: 'higher energy', color: '#ef4444' });
+  if (cE - sE < -1.5) clues.push({ label: 'lower energy',  color: '#0ea5e9' });
 
   const sB = source?.bpm, cB = candidate?.bpm;
   if (sB && cB) {
@@ -128,7 +128,7 @@ const TrackCard = React.memo(function TrackCard({ rank, track, score, source, on
   const meta = [];
   if (track.bpm)          meta.push(`${Math.round(track.bpm)} BPM`);
   if (track.key)          meta.push(track.key);
-  if (track.energy != null) meta.push(`${parseFloat(track.energy).toFixed(2)} NRG`);
+  if (track.energy != null) meta.push(`${Math.round(track.energy)} NRG`);
 
   return (
     <m.div

@@ -270,7 +270,7 @@ _PLAYLIST_TOOLS = [
                                 "items": {"type": "number"},
                                 "minItems": 2,
                                 "maxItems": 2,
-                                "description": "[min, max] energy on 0-1 scale",
+                                "description": "[min, max] energy on 1-10 integer scale",
                             },
                             "bpm_range": {
                                 "type": "array",
@@ -324,7 +324,7 @@ _PLAYLIST_TOOLS = [
                                 "items": {"type": "number"},
                                 "minItems": 2,
                                 "maxItems": 2,
-                                "description": "[min, max] energy on 0-1 scale",
+                                "description": "[min, max] energy on 1-10 integer scale",
                             },
                             "bpm_range": {
                                 "type": "array",
@@ -1353,7 +1353,7 @@ OUTPUT — valid JSON only:
             if has_energy and t.get("energy") is not None:
                 lo, hi = energy_range
                 mid    = (lo + hi) / 2
-                span   = max(hi - lo, 0.1)
+                span   = max(hi - lo, 1)
                 dist   = abs(float(t["energy"]) - mid) / span
                 score += max(0.0, 1.0 - dist) * 0.12
 
