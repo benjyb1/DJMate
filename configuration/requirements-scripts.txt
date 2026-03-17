@@ -1,0 +1,25 @@
+# Extra dependencies for offline scripts (3d_coordinator, ingest_music, etc.)
+# Install locally: pip install -r configuration/requirements-scripts.txt
+# NOT needed on Render — these are for local dev only.
+
+-r requirements.txt
+
+# Audio analysis
+librosa==0.10.2.post1
+
+# Dimensionality reduction (3D coordinates)
+umap-learn==0.5.7
+
+# Vector similarity search
+faiss-cpu==1.13.2
+
+# Deep learning (audio fingerprinting)
+torch==2.10.0
+
+# Data processing
+pandas==2.3.3
+pyarrow==23.0.0
+
+# OCR (optional)
+pytesseract==0.3.13
+pillow==11.3.0
