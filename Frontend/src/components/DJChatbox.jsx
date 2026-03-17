@@ -257,7 +257,7 @@ const TrackCard = React.memo(function TrackCard({ rank, track, score, source, on
           {/* Find similar */}
           {onFindSimilar && (
             <m.button
-              onClick={e => { e.stopPropagation(); onFindSimilar(track.trackid); }}
+              onClick={e => { e.stopPropagation(); onFindSimilar(track.trackid, track.title); }}
               aria-label={`Find similar to ${track.title}`}
               whileHover={{ scale: 1.05, borderColor: 'rgba(0,212,255,0.5)', color: '#00d4ff' }}
               whileTap={{ scale: 0.95 }}
@@ -653,15 +653,15 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
       setIsOpen(true); setIsMinimised(false); setQuery(queryText);
       setTimeout(() => runSearch(queryText), 150);
     },
-    openAndFindSimilar: (trackid) => {
+    openAndFindSimilar: (trackid, trackName) => {
       setIsOpen(true); setIsMinimised(false);
-      setQuery(`similar to track ${trackid}`);
+      setQuery(`similar to ${trackName || `track ${trackid}`}`);
       setTimeout(() => runFindSimilar(trackid), 150);
     },
   }), [runSearch, runFindSimilar]);
 
-  const handleFindSimilarInChat = useCallback((trackid) => {
-    setQuery(`similar to track ${trackid}`);
+  const handleFindSimilarInChat = useCallback((trackid, trackName) => {
+    setQuery(`similar to ${trackName || `track ${trackid}`}`);
     runFindSimilar(trackid);
   }, [runFindSimilar]);
 
@@ -901,7 +901,7 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
                       >
                         {errorMsg}
                         <div style={{ fontSize: 9, color: '#475569', marginTop: 4, fontFamily: 'monospace' }}>
-                          Ensure backend is running at localhost:8000 with /chat/* routes mounted.
+                          Could not reach the server. Please try again.
                         </div>
                       </m.div>
                     )}

@@ -9,6 +9,7 @@ import PlaylistOrganiser from './components/playlist/PlaylistOrganiser';
 import GlassPanel from './components/ui/GlassPanel';
 import { makeSupabaseCoverUrl } from './utils/coverUrl';
 import { IconPlay, IconPause, IconSearch, IconWaveform } from './components/icons';
+import { apiClient } from './api/apiClient';
 
 // ── Parse semantic_tags (handles array, JSON string, or CSV) ──────────────
 function parseTags(raw) {
@@ -73,27 +74,117 @@ function makeGenerativeTexture(node) {
 // Icons imported from ./components/icons
 
 // ── Waveform visualization bars ──────────────────────────────────────────
-function WaveformViz({ bpm, isPlaying }) {
+function WaveformViz({ bpm, isPlaying, audioRef, currentTime, duration }) {
   const barCount = 32;
   const seed = bpm ? Math.round(bpm) : 120;
+  const containerRef = useRef(null);
+  const progress = duration > 0 ? currentTime / duration : 0;
+
+  const handleClick = (e) => {
+    if (!audioRef?.current || !duration) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    audioRef.current.currentTime = ratio * duration;
+  };
+
   return (
-    <div style={{
-      display: 'flex', alignItems: 'flex-end', gap: 2,
-      height: 80, width: '100%', padding: '0 4px',
-    }}>
+    <div
+      ref={containerRef}
+      onClick={handleClick}
+      style={{
+        display: 'flex', alignItems: 'flex-end', gap: 2,
+        height: 80, width: '100%', padding: '0 4px',
+        cursor: duration > 0 ? 'pointer' : 'default',
+      }}
+    >
       {Array.from({ length: barCount }, (_, i) => {
         const h = 15 + ((seed * (i + 1) * 7) % 65);
+        const barProgress = (i + 1) / barCount;
+        const isPast = barProgress <= progress;
         return (
           <div key={i} style={{
             flex: 1, height: `${h}%`,
             borderRadius: 'var(--radius-xs)',
-            background: 'linear-gradient(180deg, #00d4ff, rgba(124,58,237,0.6))',
-            opacity: isPlaying ? 0.9 : 0.4,
-            animation: isPlaying ? `waveBar ${0.4 + (i % 5) * 0.15}s ease-in-out ${i * 0.03}s infinite alternate` : 'none',
-            transition: 'opacity 300ms ease',
+            background: isPast
+              ? 'linear-gradient(180deg, #00d4ff, rgba(124,58,237,0.8))'
+              : 'linear-gradient(180deg, rgba(0,212,255,0.35), rgba(124,58,237,0.2))',
+            opacity: isPlaying ? (isPast ? 1 : 0.5) : (isPast ? 0.7 : 0.3),
+            animation: isPlaying && isPast ? `waveBar ${0.4 + (i % 5) * 0.15}s ease-in-out ${i * 0.03}s infinite alternate` : 'none',
+            transition: 'opacity 300ms ease, background 200ms ease',
           }} />
         );
       })}
+    </div>
+  );
+}
+
+// ── Inline editable field with autocomplete ──────────────────────────────
+function InlineEdit({ value, onSave, suggestions, type = 'text', color = '#00d4ff', small }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || '');
+  const inputRef = useRef(null);
+
+  const match = type === 'text' && draft.length > 0
+    ? (suggestions || []).find(s => s.toLowerCase().startsWith(draft.toLowerCase()) && s.toLowerCase() !== draft.toLowerCase())
+    : null;
+
+  useEffect(() => { if (editing) { setDraft(value || ''); setTimeout(() => inputRef.current?.focus(), 0); } }, [editing]);
+
+  const commit = () => {
+    const final = type === 'number' ? Math.max(1, Math.min(10, parseInt(draft) || 1)) : (match && draft.length > 0 ? match : draft);
+    if (String(final) !== String(value)) onSave(final);
+    setEditing(false);
+  };
+
+  const handleKey = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') setEditing(false);
+    else if (e.key === 'Tab' && match) { e.preventDefault(); setDraft(match); }
+  };
+
+  if (!editing) {
+    return (
+      <div
+        onClick={() => setEditing(true)}
+        title="Click to edit"
+        style={{
+          fontSize: small ? 13 : 20, fontWeight: 700, color,
+          fontFamily: "'JetBrains Mono', monospace",
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          cursor: 'pointer', position: 'relative',
+        }}
+      >
+        {value || '—'}
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ position: 'absolute', right: 0, top: 2, opacity: 0.3 }}>
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+        </svg>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: 'relative', fontSize: small ? 13 : 20, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
+      {type === 'text' && match && (
+        <div style={{ position: 'absolute', top: 0, left: 0, color: 'rgba(255,255,255,0.2)', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+          {draft}{match.slice(draft.length)}
+        </div>
+      )}
+      <input
+        ref={inputRef}
+        type={type}
+        min={type === 'number' ? 1 : undefined}
+        max={type === 'number' ? 10 : undefined}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={handleKey}
+        onBlur={commit}
+        style={{
+          width: '100%', background: 'transparent', border: 'none', outline: 'none',
+          color, fontSize: 'inherit', fontWeight: 'inherit', fontFamily: 'inherit',
+          padding: 0, position: 'relative', zIndex: 1,
+        }}
+      />
     </div>
   );
 }
@@ -118,6 +209,46 @@ export default function App() {
   const [activeTab,     setActiveTab]     = useState('DISCOVERY');
   const [graphDims,     setGraphDims]     = useState({ w: window.innerWidth, h: window.innerHeight - 80 });
   const [setList,       setSetList]       = useState([]);
+  const [currentTime,   setCurrentTime]   = useState(0);
+  const [duration,      setDuration]      = useState(0);
+  const [availableTags, setAvailableTags] = useState([]);
+
+  // ── Fetch available tags for autocomplete ──────────────────────────────
+  useEffect(() => {
+    apiClient.get('/tags/available').then(data => {
+      setAvailableTags(data.semantic_tags || []);
+    }).catch(() => {});
+  }, []);
+
+  // ── Save label edit + trigger online learning ──────────────────────────
+  const handleLabelSave = useCallback(async (field, value) => {
+    if (!selectedTrack) return;
+    const trackid = selectedTrack.id || selectedTrack.trackid;
+    const payload = {};
+    if (field === 'genre') payload.semantic_tags = [value];
+    else if (field === 'energy') payload.energy = value;
+    try {
+      await apiClient.put(`/tags/${trackid}`, payload);
+      // Update local state
+      setSelectedTrack(prev => {
+        if (!prev) return prev;
+        if (field === 'genre') return { ...prev, semanticTags: [value, ...(prev.semanticTags || []).slice(1)] };
+        if (field === 'energy') return { ...prev, energy: value };
+        return prev;
+      });
+      // Also update allNodes so the graph reflects the change
+      setAllNodes(prev => prev.map(n => {
+        if (String(n.id) !== String(trackid)) return n;
+        if (field === 'genre') return { ...n, semanticTags: [value, ...(n.semanticTags || []).slice(1)] };
+        if (field === 'energy') return { ...n, energy: value };
+        return n;
+      }));
+      // Trigger online learning propagation (fire-and-forget)
+      apiClient.post('/tags/learning/propagate', { dry_run: false }).catch(() => {});
+    } catch (err) {
+      console.error('Failed to save label:', err);
+    }
+  }, [selectedTrack]);
 
   // ── Track container size for ForceGraph ────────────────────────────────
   useEffect(() => {
@@ -184,6 +315,7 @@ export default function App() {
 
   useEffect(() => {
     if (audioRef.current) { audioRef.current.pause(); setIsPlaying(false); }
+    setCurrentTime(0); setDuration(0);
   }, [selectedTrack]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
@@ -222,8 +354,8 @@ export default function App() {
     }
   }, [isPlaying, selectedTrack]);
 
-  const handleFindSimilar = useCallback((trackid) => {
-    chatboxRef.current?.openAndFindSimilar(trackid);
+  const handleFindSimilar = useCallback((trackid, trackName) => {
+    chatboxRef.current?.openAndFindSimilar(trackid, trackName);
   }, []);
 
   // ── Glow ring texture (for selected/hovered nodes) ─────────────────────
@@ -615,7 +747,14 @@ export default function App() {
               />
 
               {/* Hidden audio */}
-              <audio ref={audioRef} onEnded={() => setIsPlaying(false)} onError={() => setIsPlaying(false)} style={{ display: 'none' }} />
+              <audio
+                ref={audioRef}
+                onEnded={() => { setIsPlaying(false); setCurrentTime(0); }}
+                onError={() => { setIsPlaying(false); setCurrentTime(0); }}
+                onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
+                onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
+                style={{ display: 'none' }}
+              />
 
               {/* ── Selected track panel (right side) ───────────────────────── */}
               <AnimatePresence>
@@ -685,21 +824,46 @@ export default function App() {
                         {[
                           { label: 'TEMPO/BPM', value: selectedTrack.bpm ? parseFloat(selectedTrack.bpm).toFixed(2) : '—', color: '#00d4ff' },
                           { label: 'HARMONIC KEY', value: selectedTrack.key || '—', color: '#a855f7' },
-                          { label: 'ENERGY', value: selectedTrack.energy != null ? Math.round(selectedTrack.energy) : '—', color: '#7c3aed' },
-                          { label: 'GENRE', value: selectedTrack.semanticTags?.[0] || '—', color: '#00d4ff', small: true },
-                        ].map(({ label, value, color, small }) => (
+                        ].map(({ label, value, color }) => (
                           <div key={label} style={{
                             background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
                             borderRadius: 'var(--radius-sm)', padding: '10px 12px',
                           }}>
                             <div style={{ fontSize: 8, letterSpacing: '0.2em', color: '#475569', fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>{label}</div>
                             <div style={{
-                              fontSize: small ? 13 : 20, fontWeight: 700, color,
+                              fontSize: 20, fontWeight: 700, color,
                               fontFamily: "'JetBrains Mono', monospace",
                               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                             }}>{value}</div>
                           </div>
                         ))}
+                        {/* Editable Energy */}
+                        <div style={{
+                          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--radius-sm)', padding: '10px 12px',
+                        }}>
+                          <div style={{ fontSize: 8, letterSpacing: '0.2em', color: '#475569', fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>ENERGY</div>
+                          <InlineEdit
+                            value={selectedTrack.energy != null ? Math.round(selectedTrack.energy) : '—'}
+                            type="number"
+                            color="#7c3aed"
+                            onSave={v => handleLabelSave('energy', parseInt(v))}
+                          />
+                        </div>
+                        {/* Editable Genre */}
+                        <div style={{
+                          background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--radius-sm)', padding: '10px 12px',
+                        }}>
+                          <div style={{ fontSize: 8, letterSpacing: '0.2em', color: '#475569', fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>GENRE</div>
+                          <InlineEdit
+                            value={selectedTrack.semanticTags?.[0] || '—'}
+                            suggestions={availableTags}
+                            color="#00d4ff"
+                            small
+                            onSave={v => handleLabelSave('genre', v)}
+                          />
+                        </div>
                       </div>
 
                       {/* Waveform */}
@@ -707,7 +871,7 @@ export default function App() {
                         background: 'var(--bg-card)', border: '1px solid var(--border-subtle)',
                         borderRadius: 'var(--radius-sm)', padding: '8px 4px', marginBottom: 16,
                       }}>
-                        <WaveformViz bpm={selectedTrack.bpm} isPlaying={isPlaying} />
+                        <WaveformViz bpm={selectedTrack.bpm} isPlaying={isPlaying} audioRef={audioRef} currentTime={currentTime} duration={duration} />
                       </div>
 
                       {/* Action buttons */}
@@ -737,7 +901,7 @@ export default function App() {
                         <m.button
                           whileHover={{ scale: 1.02 }}
                           whileTap={{ scale: 0.97 }}
-                          onClick={() => handleFindSimilar(selectedTrack.id)}
+                          onClick={() => handleFindSimilar(selectedTrack.id, selectedTrack.name)}
                           style={{
                             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                             flex: 1, padding: '10px 0',
