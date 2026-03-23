@@ -1,4 +1,11 @@
-const SUPABASE_COVERS_BASE = 'https://cvermotfxamubejfnoje.supabase.co/storage/v1/object/public/album-covers/';
+import { getCredentials } from '../stores/credentialStore';
+
+function getCoversBase() {
+  const creds = getCredentials();
+  if (creds?.url) return `${creds.url}/storage/v1/object/public/album-covers/`;
+  // Fallback for dev
+  return 'https://cvermotfxamubejfnoje.supabase.co/storage/v1/object/public/album-covers/';
+}
 
 /**
  * Build the safe ASCII storage filename for a track's cover art.
@@ -24,5 +31,5 @@ export function makeSupabaseCoverUrl(artist, title) {
   safe = safe.toLowerCase();
   safe = safe.split('').map(c => /[a-z0-9\-_]/.test(c) ? c : '_').join('');
   safe = safe.split('_').filter(Boolean).join('_').slice(0, 150);
-  return `${SUPABASE_COVERS_BASE}${safe}.jpg`;
+  return `${getCoversBase()}${safe}.jpg`;
 }

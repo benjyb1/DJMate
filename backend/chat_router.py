@@ -10,31 +10,19 @@ Mount in your main FastAPI app:
   app.include_router(chat_router, prefix="/chat", tags=["chat"])
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 import logging
 import numpy as np
 import json
 
+from backend.tenant import get_tenant_db
+from backend.data.db_interface import DatabaseManager
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# ── Lazy singletons (initialised on first request) ─────────────────────────────
-_interpreter = None
-
-from backend.dependencies import get_db
-
-
-async def _get_interpreter():
-    global _interpreter
-    if _interpreter is None:
-        from backend.llm_interpreter import SemanticInterpreter
-        db = get_db()
-        _interpreter = SemanticInterpreter(supabase_client=db.client)
-        await _interpreter.initialize()
-    return _interpreter
 
 
 # ── Request / Response models ──────────────────────────────────────────────────
@@ -171,7 +159,7 @@ async def _embedding_search_for_track(db, track_id: str, limit: int) -> List[Dic
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @router.post("/interpret", response_model=InterpretResponse)
-async def interpret(req: InterpretRequest):
+async def interpret(req: InterpretRequest, db: DatabaseManager = Depends(get_tenant_db)):
     """
     Parse a free-text DJ query into structured search parameters.
     Now includes intent classification and current_track context.
@@ -179,14 +167,15 @@ async def interpret(req: InterpretRequest):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-    from backend.llm_interpreter import InterpretationContext
+    from backend.llm_interpreter import SemanticInterpreter, InterpretationContext
 
     context = None
     if req.current_track:
         context = InterpretationContext(current_track=req.current_track)
 
     try:
-        interp = await _get_interpreter()
+        interp = SemanticInterpreter(supabase_client=db.client)
+        await interp.initialize()
         params = await interp.interpret(req.query.strip(), context=context)
         return InterpretResponse(params=params)
     except Exception as e:
@@ -195,7 +184,7 @@ async def interpret(req: InterpretRequest):
 
 
 @router.post("/search", response_model=SearchResponse)
-async def search(req: SearchRequest):
+async def search(req: SearchRequest, db: DatabaseManager = Depends(get_tenant_db)):
     """
     Run the full search pipeline.
 
@@ -204,8 +193,9 @@ async def search(req: SearchRequest):
     - vibe_genre_search / transition_from_current: uses the tag-scoring pipeline
     """
     try:
-        interp = await _get_interpreter()
-        db     = get_db()
+        from backend.llm_interpreter import SemanticInterpreter
+        interp = SemanticInterpreter(supabase_client=db.client)
+        await interp.initialize()
         params = req.params
         intent = params.get("intent", "vibe_genre_search")
 

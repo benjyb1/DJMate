@@ -53,10 +53,11 @@ class DatabaseManager:
     Implements connection pooling, caching, and vector search optimization.
     """
 
-    def __init__(self, enable_caching: bool = True, pool_size: int = 10):
+    def __init__(self, enable_caching: bool = True, pool_size: int = 10,
+                 supabase_url: str = None, supabase_key: str = None):
         """Initialize with enhanced configuration."""
-        self.supabase_url = os.getenv("SUPABASE_URL")
-        self.supabase_key = os.getenv("SUPABASE_KEY")
+        self.supabase_url = supabase_url or os.getenv("SUPABASE_URL")
+        self.supabase_key = supabase_key or os.getenv("SUPABASE_KEY")
         self.postgres_url = os.getenv("DATABASE_URL")  # Direct PostgreSQL connection
 
         # Initialize clients

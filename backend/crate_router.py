@@ -15,33 +15,17 @@ Mount:
   app.include_router(crate_router, prefix="/crates", tags=["crates"])
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import logging
 import uuid
 
+from backend.tenant import get_tenant_db
+from backend.data.db_interface import DatabaseManager
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-_generator = None
-_bridge_analyzer = None
-
-from backend.dependencies import get_db
-
-def _get_generator():
-    global _generator
-    if _generator is None:
-        from backend.crate_generator import CrateGenerator
-        _generator = CrateGenerator(get_db())
-    return _generator
-
-def _get_bridge_analyzer():
-    global _bridge_analyzer
-    if _bridge_analyzer is None:
-        from backend.crate_generator import BridgeAnalyzer
-        _bridge_analyzer = BridgeAnalyzer(get_db())
-    return _bridge_analyzer
 
 # ── Request/Response models ──
 
@@ -85,10 +69,9 @@ class UpdateTracksRequest(BaseModel):
 # ── Endpoints ──
 
 @router.post("/session", response_model=SessionResponse)
-async def create_session(req: CreateSessionRequest):
+async def create_session(req: CreateSessionRequest, db: DatabaseManager = Depends(get_tenant_db)):
     """Create a new crate-building session."""
     try:
-        db = get_db()
         session_id = str(uuid.uuid4())
         # Store session in DB (if table exists) or in-memory
         session = await db.create_crate_session(session_id, req.name)
@@ -98,10 +81,9 @@ async def create_session(req: CreateSessionRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/session/{session_id}", response_model=SessionResponse)
-async def get_session(session_id: str):
+async def get_session(session_id: str, db: DatabaseManager = Depends(get_tenant_db)):
     """Get full crate tree for a session."""
     try:
-        db = get_db()
         session = await db.get_crate_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -113,14 +95,14 @@ async def get_session(session_id: str):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/generate", response_model=CrateResponse)
-async def generate_crate(req: GenerateCrateRequest):
+async def generate_crate(req: GenerateCrateRequest, db: DatabaseManager = Depends(get_tenant_db)):
     """
     Generate a crate using the LLM to interpret the prompt,
     then the crate generator to assemble cohesive tracks.
     """
     try:
-        db = get_db()
-        generator = _get_generator()
+        from backend.crate_generator import CrateGenerator
+        generator = CrateGenerator(db)
 
         # Step 1: Interpret the prompt via the LLM
         from backend.llm_interpreter import SemanticInterpreter, InterpretationContext
@@ -171,7 +153,8 @@ async def generate_crate(req: GenerateCrateRequest):
 
         # Step 6: Auto-run bridge analysis if parent exists
         if req.parent_crate_id and parent_tracks and result["tracks"]:
-            bridge_analyzer = _get_bridge_analyzer()
+            from backend.crate_generator import BridgeAnalyzer
+            bridge_analyzer = BridgeAnalyzer(db)
             bridge = await bridge_analyzer.analyze_bridge(parent_tracks, result["tracks"])
             if bridge.get("needs_bridge"):
                 crate_data["metadata"]["bridge_warning"] = bridge
@@ -183,11 +166,11 @@ async def generate_crate(req: GenerateCrateRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/bridge", response_model=BridgeResponse)
-async def analyze_bridge(req: BridgeRequest):
+async def analyze_bridge(req: BridgeRequest, db: DatabaseManager = Depends(get_tenant_db)):
     """Analyze the transition gap between two crates."""
     try:
-        db = get_db()
-        bridge_analyzer = _get_bridge_analyzer()
+        from backend.crate_generator import BridgeAnalyzer
+        bridge_analyzer = BridgeAnalyzer(db)
 
         crate_a = await db.get_crate(req.crate_a_id)
         crate_b = await db.get_crate(req.crate_b_id)
@@ -208,10 +191,10 @@ async def analyze_bridge(req: BridgeRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/{crate_id}/tracks")
-async def update_crate_tracks(crate_id: str, req: UpdateTracksRequest):
+async def update_crate_tracks(crate_id: str, req: UpdateTracksRequest,
+                              db: DatabaseManager = Depends(get_tenant_db)):
     """Update the track list for a crate."""
     try:
-        db = get_db()
         await db.update_crate_tracks(crate_id, req.track_ids)
         crate = await db.get_crate(crate_id)
         return crate or {"id": crate_id, "tracks": req.track_ids}
@@ -220,10 +203,9 @@ async def update_crate_tracks(crate_id: str, req: UpdateTracksRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.delete("/{crate_id}")
-async def delete_crate(crate_id: str):
+async def delete_crate(crate_id: str, db: DatabaseManager = Depends(get_tenant_db)):
     """Delete a crate and all its children."""
     try:
-        db = get_db()
         await db.delete_crate(crate_id)
         return {"status": "deleted", "id": crate_id}
     except Exception as e:

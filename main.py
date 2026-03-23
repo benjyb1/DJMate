@@ -9,7 +9,7 @@ load_dotenv()
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -22,6 +22,8 @@ import numpy as np
 from backend.llm_interpreter import SemanticInterpreter
 
 from backend.dependencies import get_db
+from backend.tenant import get_tenant_db
+from backend.data.db_interface import DatabaseManager
 from backend.chat_router import router as chat_router
 from backend.tag_router import router as tag_router
 from backend.crate_router import router as crate_router
@@ -62,7 +64,7 @@ app.add_middleware(
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-Supabase-Url", "X-Supabase-Key"],
 )
 app.include_router(chat_router, prefix="/chat", tags=["chat"])
 app.include_router(tag_router, prefix="/tags", tags=["tags"])
@@ -76,11 +78,6 @@ class NaturalLanguageQuery(BaseModel):
     context: Optional[Dict[str, Any]] = None
     session_id: Optional[str] = None
 
-# ── Singletons ────────────────────────────────────────────────────────────────
-
-semantic_interpreter = SemanticInterpreter(
-    supabase_client=db_manager.client
-)
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
@@ -98,6 +95,7 @@ async def root():
 async def get_all_tracks(
         limit: int = Query(100, ge=1, le=500),
         offset: int = Query(0, ge=0),
+        db: DatabaseManager = Depends(get_tenant_db),
 ):
     """
     Get tracks with PRECOMPUTED UMAP coordinates for 3D visualization.
@@ -112,14 +110,14 @@ async def get_all_tracks(
         offset: Starting position for pagination
     """
     try:
-        if not db_manager.client:
+        if not db.client:
             return {"tracks": [], "total": 0, "limit": limit, "offset": offset}
 
         # Limit maximum to prevent memory issues
         limit = min(limit, 500)
 
         # Get total count first (lightweight query)
-        count_response = db_manager.client.table("tracks") \
+        count_response = db.client.table("tracks") \
             .select("trackid", count="exact") \
             .execute()
         total_count = count_response.count if hasattr(count_response, 'count') else \
@@ -127,7 +125,7 @@ async def get_all_tracks(
 
         # Fetch paginated tracks WITH UMAP coordinates
         # CRITICAL: Include x_coord, y_coord, z_coord from your database
-        response = db_manager.client.table("tracks") \
+        response = db.client.table("tracks") \
             .select("trackid, title, artist, album, bpm, key, filepath, "
                     "x_coord, y_coord, z_coord, "
                     "track_labels(semantic_tags, energy, vibe)") \
@@ -186,7 +184,7 @@ async def get_all_tracks(
 
 
 @app.get("/tracks/resolve")
-async def resolve_track(q: str):
+async def resolve_track(q: str, db: DatabaseManager = Depends(get_tenant_db)):
     """
     Fuzzy-match a track name/artist string to a trackid.
     Used by the chatbox to resolve 'similar to Song X' queries.
@@ -194,13 +192,13 @@ async def resolve_track(q: str):
     capture 'resolve' as a track_id.
     """
     try:
-        if not db_manager.client or not q.strip():
+        if not db.client or not q.strip():
             return {"match": None}
 
         search = q.strip().lower()
 
         # Search by title (ilike = case-insensitive)
-        resp = db_manager.client.table("tracks") \
+        resp = db.client.table("tracks") \
             .select("trackid, title, artist") \
             .ilike("title", f"%{search}%") \
             .limit(5) \
@@ -210,7 +208,7 @@ async def resolve_track(q: str):
             return {"match": resp.data[0]}
 
         # Fallback: search by artist
-        resp = db_manager.client.table("tracks") \
+        resp = db.client.table("tracks") \
             .select("trackid, title, artist") \
             .ilike("artist", f"%{search}%") \
             .limit(5) \
@@ -226,13 +224,14 @@ async def resolve_track(q: str):
 
 
 @app.get("/tracks/{track_id}/neighbors")
-async def get_track_neighbors(track_id: str, limit: int = Query(8, ge=1, le=100)):
+async def get_track_neighbors(track_id: str, limit: int = Query(8, ge=1, le=100),
+                              db: DatabaseManager = Depends(get_tenant_db)):
     """
     Similarity edges for click-to-edges feature in the 3D cloud.
     Returns the top-N most similar tracks to use as edge targets.
     """
     try:
-        track = await db_manager.get_track_by_id(track_id)
+        track = await db.get_track_by_id(track_id)
         if not track:
             raise HTTPException(status_code=404, detail="Track not found")
 
@@ -244,7 +243,7 @@ async def get_track_neighbors(track_id: str, limit: int = Query(8, ge=1, le=100)
         )
 
         if embedding:
-            similar = await db_manager.find_similar_tracks(
+            similar = await db.find_similar_tracks(
                 query_embedding=embedding,
                 limit=limit + 1,
                 threshold=0.3
@@ -269,11 +268,11 @@ async def get_track_neighbors(track_id: str, limit: int = Query(8, ge=1, le=100)
 
 
 @app.get("/tracks/{track_id}/audio")
-async def get_track_audio(track_id: str):
+async def get_track_audio(track_id: str, db: DatabaseManager = Depends(get_tenant_db)):
     """Stream audio file for a given track. Used by the React frontend."""
     try:
-        # Query Supabase directly to avoid stale cache in db_manager
-        _direct = db_manager.client.table("tracks").select("filepath").eq("trackid", track_id).single().execute()
+        # Query Supabase directly to avoid stale cache
+        _direct = db.client.table("tracks").select("filepath").eq("trackid", track_id).single().execute()
         filepath = (_direct.data or {}).get("filepath") if _direct.data else None
 
         if not filepath:
@@ -324,14 +323,15 @@ def _parse_embedding(emb):
 
 
 @app.get("/tracks/{track_id}/similar")
-async def get_similar_tracks(track_id: str, limit: int = Query(7, ge=1, le=100)):
+async def get_similar_tracks(track_id: str, limit: int = Query(7, ge=1, le=100),
+                             db: DatabaseManager = Depends(get_tenant_db)):
     """
     Embedding-based similarity search — same logic as streamSimilar.py Tab 1.
     Returns tracks ranked by cosine similarity of their embeddings.
     """
     try:
         # 1. Get source track (includes embedding via select *)
-        source = await db_manager.get_track_by_id(track_id)
+        source = await db.get_track_by_id(track_id)
         if not source:
             raise HTTPException(status_code=404, detail="Track not found")
 
@@ -343,7 +343,7 @@ async def get_similar_tracks(track_id: str, limit: int = Query(7, ge=1, le=100))
             raise HTTPException(status_code=404, detail="Track has no embedding")
 
         # 2. Find similar via Supabase RPC (match_tracks) — same as streamSimilar.py
-        raw = await db_manager.find_similar_tracks(
+        raw = await db.find_similar_tracks(
             query_embedding=source_embedding,
             limit=limit + 1,
             threshold=0.2
@@ -357,7 +357,7 @@ async def get_similar_tracks(track_id: str, limit: int = Query(7, ge=1, le=100))
                 continue
 
             # Get full track data
-            full = await db_manager.get_track_by_id(rid)
+            full = await db.get_track_by_id(rid)
             if not full:
                 continue
 
@@ -431,13 +431,16 @@ async def get_similar_tracks(track_id: str, limit: int = Query(7, ge=1, le=100))
 # ── AI endpoints ──────────────────────────────────────────────────────────────
 
 @app.post("/parse-intent")
-async def parse_natural_language(query: NaturalLanguageQuery):
+async def parse_natural_language(query: NaturalLanguageQuery,
+                                 db: DatabaseManager = Depends(get_tenant_db)):
     """Convert natural language to structured query parameters."""
     try:
-        context = await db_manager.get_session_context(query.session_id) \
+        context = await db.get_session_context(query.session_id) \
             if query.session_id else None
 
-        structured_query = await semantic_interpreter.interpret(
+        interp = SemanticInterpreter(supabase_client=db.client)
+        await interp.initialize()
+        structured_query = await interp.interpret(
             query.query,
             context=context
         )

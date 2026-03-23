@@ -13,11 +13,14 @@ Mount in your main FastAPI app:
   app.include_router(tag_router, prefix="/tags", tags=["tags"])
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import json
 import logging
+
+from backend.tenant import get_tenant_db
+from backend.data.db_interface import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +28,6 @@ router = APIRouter()
 
 # ── Lazy singletons (initialised on first request) ───────────────────────────
 _learner = None
-
-from backend.dependencies import get_db
 
 
 def _get_learner():
@@ -61,10 +62,9 @@ class AvailableLabels(BaseModel):
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 @router.get("/available", response_model=AvailableLabels)
-async def get_available_tags():
+async def get_available_tags(db: DatabaseManager = Depends(get_tenant_db)):
     """Return all unique semantic_tags and vibes across the library (for autocomplete)."""
     try:
-        db = get_db()
         result = await db.get_available_tags()
         return AvailableLabels(
             semantic_tags=result.get("semantic_tags", []),
@@ -76,10 +76,9 @@ async def get_available_tags():
 
 
 @router.get("/{trackid}", response_model=TrackLabels)
-async def get_track_labels(trackid: str):
+async def get_track_labels(trackid: str, db: DatabaseManager = Depends(get_tenant_db)):
     """Get current labels for a single track."""
     try:
-        db = get_db()
         labels = await db.get_track_labels(trackid)
         if labels is None:
             raise HTTPException(status_code=404, detail="Track labels not found")
@@ -98,7 +97,8 @@ async def get_track_labels(trackid: str):
 
 
 @router.put("/{trackid}", response_model=TrackLabels)
-async def update_track_labels(trackid: str, req: UpdateLabelsRequest):
+async def update_track_labels(trackid: str, req: UpdateLabelsRequest,
+                              db: DatabaseManager = Depends(get_tenant_db)):
     """
     Update labels for a track.
 
@@ -117,7 +117,6 @@ async def update_track_labels(trackid: str, req: UpdateLabelsRequest):
         raise HTTPException(status_code=400, detail="No fields to update")
 
     try:
-        db = get_db()
         result = await db.update_track_labels(trackid, updates, log_corrections=True)
         return TrackLabels(
             trackid=result["trackid"],

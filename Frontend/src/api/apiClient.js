@@ -1,4 +1,6 @@
 // src/api/apiClient.js - Fixed version with pagination and memory management
+import { getCredentials } from '../stores/credentialStore';
+
 class APIError extends Error {
   constructor(message, status, response) {
     super(message);
@@ -32,8 +34,15 @@ class APIClient {
       }
     }
 
+    // Inject user's Supabase creds so the backend knows which DB to hit
+    const creds = getCredentials();
+    const tenantHeaders = creds ? {
+      'X-Supabase-Url': creds.url,
+      'X-Supabase-Key': creds.key,
+    } : {};
+
     const config = {
-      headers: { ...this.defaultHeaders, ...options.headers },
+      headers: { ...this.defaultHeaders, ...tenantHeaders, ...options.headers },
       ...options,
     };
 

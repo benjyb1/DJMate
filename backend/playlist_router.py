@@ -12,7 +12,7 @@ Endpoints:
 Mount: app.include_router(router, prefix="/playlists", tags=["playlists"])
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -23,13 +23,11 @@ import shutil
 from xml.etree.ElementTree import ParseError as ET_ParseError
 
 from backend.rekordbox_parser import parse_xml, match_tracks, generate_export_xml
+from backend.tenant import get_tenant_db
+from backend.data.db_interface import DatabaseManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# ── Shared singleton ─────────────────────────────────────────────────────────
-
-from backend.dependencies import get_db
 
 
 # ── Request / Response models ────────────────────────────────────────────────
@@ -101,10 +99,9 @@ class ExportFoldersRequest(BaseModel):
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 @router.post("/import", response_model=ImportResult)
-async def import_rekordbox(req: ImportRequest):
+async def import_rekordbox(req: ImportRequest, db: DatabaseManager = Depends(get_tenant_db)):
     """Parse Rekordbox XML, fuzzy-match tracks to DB, and create a playlist."""
     try:
-        db = get_db()
 
         # Parse the XML
         parsed = parse_xml(req.xml_content)
@@ -169,10 +166,9 @@ async def import_rekordbox(req: ImportRequest):
 
 
 @router.get("", response_model=List[PlaylistSummary])
-async def list_playlists():
+async def list_playlists(db: DatabaseManager = Depends(get_tenant_db)):
     """List all playlists."""
     try:
-        db = get_db()
         playlists = await db.get_playlists()
         return [
             PlaylistSummary(
@@ -190,10 +186,9 @@ async def list_playlists():
 
 
 @router.post("/create")
-async def create_playlist(req: CreatePlaylistRequest):
+async def create_playlist(req: CreatePlaylistRequest, db: DatabaseManager = Depends(get_tenant_db)):
     """Create an empty playlist with optional parent_id and description."""
     try:
-        db = get_db()
         playlist_id = str(uuid.uuid4())
         payload = {"id": playlist_id, "name": req.name, "source": "manual"}
         if req.parent_id:
@@ -212,10 +207,9 @@ async def create_playlist(req: CreatePlaylistRequest):
 
 
 @router.get("/tree")
-async def get_playlist_tree():
+async def get_playlist_tree(db: DatabaseManager = Depends(get_tenant_db)):
     """Get all playlists as a flat list with track counts (for tree rendering)."""
     try:
-        db = get_db()
         tree = await db.get_playlist_tree()
         return tree
     except Exception as e:
@@ -224,10 +218,9 @@ async def get_playlist_tree():
 
 
 @router.get("/pool")
-async def get_track_pool():
+async def get_track_pool(db: DatabaseManager = Depends(get_tenant_db)):
     """Get all tracks with labels (lightweight, no embeddings)."""
     try:
-        db = get_db()
         pool = await db.get_track_pool()
         return pool
     except Exception as e:
@@ -236,10 +229,9 @@ async def get_track_pool():
 
 
 @router.post("/export-folders")
-async def export_folders(req: ExportFoldersRequest):
+async def export_folders(req: ExportFoldersRequest, db: DatabaseManager = Depends(get_tenant_db)):
     """Export playlists as folders with copied audio files."""
     try:
-        db = get_db()
         all_filepaths = []
         playlist_data = []
 
@@ -322,10 +314,9 @@ class OrganizeRequest(BaseModel):
 
 
 @router.post("/organize")
-async def organize_playlists(req: OrganizeRequest):
+async def organize_playlists(req: OrganizeRequest, db: DatabaseManager = Depends(get_tenant_db)):
     """Use the LLM to interpret a natural-language playlist command and execute it."""
     try:
-        db = get_db()
 
         # 1. Existing playlists
         existing_playlists = await db.get_playlist_tree()
@@ -412,7 +403,7 @@ class SuggestTracksRequest(BaseModel):
 
 
 @router.post("/suggest-tracks")
-async def suggest_tracks(req: SuggestTracksRequest):
+async def suggest_tracks(req: SuggestTracksRequest, db: DatabaseManager = Depends(get_tenant_db)):
     """Preview mode: LLM interprets query and returns matching tracks WITHOUT persisting.
 
     Returns:
@@ -423,7 +414,6 @@ async def suggest_tracks(req: SuggestTracksRequest):
         message: summary text
     """
     try:
-        db = get_db()
 
         # 1. Existing playlists for context
         existing_playlists = await db.get_playlist_tree()
@@ -527,10 +517,9 @@ async def suggest_tracks(req: SuggestTracksRequest):
 
 
 @router.get("/{playlist_id}", response_model=PlaylistDetail)
-async def get_playlist(playlist_id: str):
+async def get_playlist(playlist_id: str, db: DatabaseManager = Depends(get_tenant_db)):
     """Get a playlist with its tracks."""
     try:
-        db = get_db()
         playlist = await db.get_playlist(playlist_id)
         if not playlist:
             raise HTTPException(status_code=404, detail="Playlist not found")
@@ -543,10 +532,10 @@ async def get_playlist(playlist_id: str):
 
 
 @router.put("/{playlist_id}/tracks", response_model=PlaylistDetail)
-async def update_playlist_tracks(playlist_id: str, req: UpdateTracksRequest):
+async def update_playlist_tracks(playlist_id: str, req: UpdateTracksRequest,
+                                 db: DatabaseManager = Depends(get_tenant_db)):
     """Reorder, add, or remove tracks in a playlist."""
     try:
-        db = get_db()
 
         # Verify playlist exists
         playlist = await db.get_playlist(playlist_id)
@@ -567,10 +556,10 @@ async def update_playlist_tracks(playlist_id: str, req: UpdateTracksRequest):
 
 
 @router.post("/{playlist_id}/suggest", response_model=SuggestResponse)
-async def suggest_tracks(playlist_id: str, req: SuggestRequest):
+async def suggest_tracks_for_playlist(playlist_id: str, req: SuggestRequest,
+                                      db: DatabaseManager = Depends(get_tenant_db)):
     """Use the LLM to suggest tracks that fit the playlist's vibe."""
     try:
-        db = get_db()
 
         playlist = await db.get_playlist(playlist_id)
         if not playlist:
@@ -632,10 +621,9 @@ async def suggest_tracks(playlist_id: str, req: SuggestRequest):
 
 
 @router.get("/{playlist_id}/export")
-async def export_playlist(playlist_id: str):
+async def export_playlist(playlist_id: str, db: DatabaseManager = Depends(get_tenant_db)):
     """Export a playlist as Rekordbox XML."""
     try:
-        db = get_db()
 
         playlist = await db.get_playlist(playlist_id)
         if not playlist:
@@ -662,10 +650,9 @@ async def export_playlist(playlist_id: str):
 
 
 @router.delete("/{playlist_id}")
-async def delete_playlist(playlist_id: str):
+async def delete_playlist(playlist_id: str, db: DatabaseManager = Depends(get_tenant_db)):
     """Delete a playlist and its track associations."""
     try:
-        db = get_db()
         success = await db.delete_playlist(playlist_id)
         if not success:
             raise HTTPException(status_code=404, detail="Playlist not found or delete failed")
@@ -678,10 +665,10 @@ async def delete_playlist(playlist_id: str):
 
 
 @router.put("/{playlist_id}/rename")
-async def rename_playlist(playlist_id: str, req: RenamePlaylistRequest):
+async def rename_playlist(playlist_id: str, req: RenamePlaylistRequest,
+                          db: DatabaseManager = Depends(get_tenant_db)):
     """Rename a playlist."""
     try:
-        db = get_db()
         success = await db.rename_playlist(playlist_id, req.name)
         if not success:
             raise HTTPException(status_code=404, detail="Playlist not found or rename failed")
@@ -694,10 +681,10 @@ async def rename_playlist(playlist_id: str, req: RenamePlaylistRequest):
 
 
 @router.post("/{playlist_id}/add-tracks")
-async def add_tracks(playlist_id: str, req: AddTracksRequest):
+async def add_tracks(playlist_id: str, req: AddTracksRequest,
+                     db: DatabaseManager = Depends(get_tenant_db)):
     """Add tracks to a playlist without removing existing ones."""
     try:
-        db = get_db()
         success = await db.add_tracks_to_playlist(playlist_id, req.track_ids)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to add tracks")
@@ -710,10 +697,10 @@ async def add_tracks(playlist_id: str, req: AddTracksRequest):
 
 
 @router.post("/{playlist_id}/remove-tracks")
-async def remove_tracks(playlist_id: str, req: RemoveTracksRequest):
+async def remove_tracks(playlist_id: str, req: RemoveTracksRequest,
+                        db: DatabaseManager = Depends(get_tenant_db)):
     """Remove specific tracks from a playlist."""
     try:
-        db = get_db()
         success = await db.remove_tracks_from_playlist(playlist_id, req.track_ids)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to remove tracks")

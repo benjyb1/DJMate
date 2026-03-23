@@ -1,15 +1,19 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { m, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { supabase } from './utils/supabaseClient';
+import { resetSupabaseClient } from './utils/supabaseClient';
 import ForceGraph3D from 'react-force-graph-3d';
 import * as THREE from 'three';
 import DJChatbox from './components/DJChatbox';
 import LiveMode from './components/LiveMode';
 import PlaylistOrganiser from './components/playlist/PlaylistOrganiser';
+import SetupScreen from './components/SetupScreen';
 import GlassPanel from './components/ui/GlassPanel';
 import { makeSupabaseCoverUrl } from './utils/coverUrl';
 import { IconPlay, IconPause, IconSearch, IconWaveform } from './components/icons';
 import { apiClient } from './api/apiClient';
+import { getCredentials, clearCredentials } from './stores/credentialStore';
+import { getLocalAudioUrl } from './utils/localAudio';
 
 // ── Parse semantic_tags (handles array, JSON string, or CSV) ──────────────
 function parseTags(raw) {
@@ -193,11 +197,28 @@ const NAV_TABS = ['DISCOVERY', 'LIVE', 'PLAYLISTS'];
 
 export default function App() {
   const reducedMotion = useReducedMotion();
+  const [hasCredentials, setHasCredentials] = useState(() => getCredentials() !== null);
+
+  // ── Setup gate: show onboarding if no Supabase creds ────────────────
+  if (!hasCredentials) {
+    return <SetupScreen onConnected={() => setHasCredentials(true)} />;
+  }
+
+  return <AppMain reducedMotion={reducedMotion} onReconfigure={() => {
+    clearCredentials();
+    resetSupabaseClient();
+    apiClient.clearCache();
+    setHasCredentials(false);
+  }} />;
+}
+
+function AppMain({ reducedMotion, onReconfigure }) {
   const fgRef      = useRef();
   const chatboxRef = useRef(null);
   const audioRef   = useRef(null);
   const texCache     = useRef({});
   const spriteMapRef = useRef({});
+  const prevBlobUrl  = useRef(null);
 
   const [trackData,     setTrackData]     = useState({ nodes: [], links: [] });
   const [allNodes,      setAllNodes]      = useState([]);
@@ -319,6 +340,27 @@ export default function App() {
   }, [selectedTrack]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
+  // Helper: resolve audio source — try local File System Access first, fall back to backend
+  const resolveAudioSrc = useCallback(async (node) => {
+    // Revoke previous blob URL to prevent memory leaks
+    if (prevBlobUrl.current) {
+      URL.revokeObjectURL(prevBlobUrl.current);
+      prevBlobUrl.current = null;
+    }
+    // If the node already has a direct URL, use it
+    if (node.audioUrl) return node.audioUrl;
+    // Try local filesystem via File System Access API
+    if (node.filepath) {
+      const blobUrl = await getLocalAudioUrl(node.filepath);
+      if (blobUrl) {
+        prevBlobUrl.current = blobUrl;
+        return blobUrl;
+      }
+    }
+    // Fallback: backend audio endpoint (works in local dev)
+    return `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/tracks/${node.id}/audio`;
+  }, []);
+
   const handleNodeClick = useCallback((node) => {
     if (!fgRef.current) return;
     if (selectedTrack?.id === node.id) {
@@ -326,17 +368,18 @@ export default function App() {
       if (!a) return;
       if (isPlaying) { a.pause(); setIsPlaying(false); }
       else {
-        const src = node.audioUrl || `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/tracks/${node.id}/audio`;
-        a.src = src;
-        a.play().catch(() => setIsPlaying(false));
-        setIsPlaying(true);
+        resolveAudioSrc(node).then(src => {
+          a.src = src;
+          a.play().catch(() => setIsPlaying(false));
+          setIsPlaying(true);
+        });
       }
       return;
     }
     setSelectedTrack(node);
     const pos = new THREE.Vector3(node.x, node.y, node.z);
     fgRef.current.cameraPosition(pos.clone().add(new THREE.Vector3(0, 20, 80)), pos, 1500);
-  }, [selectedTrack, isPlaying]);
+  }, [selectedTrack, isPlaying, resolveAudioSrc]);
 
   const handleChatTrackSelect = useCallback((trackid) => {
     const node = allNodes.find(n => String(n.id) === String(trackid));
@@ -347,12 +390,13 @@ export default function App() {
     if (!audioRef.current || !selectedTrack) return;
     if (isPlaying) { audioRef.current.pause(); setIsPlaying(false); }
     else {
-      const src = selectedTrack.audioUrl || `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/tracks/${selectedTrack.id}/audio`;
-      audioRef.current.src = src;
-      audioRef.current.play().catch(() => setIsPlaying(false));
-      setIsPlaying(true);
+      resolveAudioSrc(selectedTrack).then(src => {
+        audioRef.current.src = src;
+        audioRef.current.play().catch(() => setIsPlaying(false));
+        setIsPlaying(true);
+      });
     }
-  }, [isPlaying, selectedTrack]);
+  }, [isPlaying, selectedTrack, resolveAudioSrc]);
 
   const handleFindSimilar = useCallback((trackid, trackName) => {
     chatboxRef.current?.openAndFindSimilar(trackid, trackName);
@@ -654,6 +698,23 @@ export default function App() {
           <span style={{ fontSize: 9, color: '#2d3748', fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.08em' }}>
             {allNodes.length} TRACKS
           </span>
+          {/* Reconfigure button */}
+          <m.button
+            onClick={onReconfigure}
+            whileHover={{ scale: 1.1, color: '#a855f7' }}
+            whileTap={{ scale: 0.9 }}
+            title="Change Supabase connection"
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: '#2d3748', padding: 2, display: 'flex', alignItems: 'center',
+              fontSize: 12, transition: 'color 200ms ease',
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </m.button>
         </div>
       </m.div>
 
