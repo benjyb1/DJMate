@@ -10,8 +10,12 @@ class APIError extends Error {
   }
 }
 
+const DEFAULT_API_URL = import.meta.env.DEV
+  ? 'http://localhost:8000'
+  : 'https://djmate.onrender.com';
+
 class APIClient {
-  constructor(baseURL = import.meta.env.VITE_API_URL || 'http://localhost:8000') {
+  constructor(baseURL = import.meta.env.VITE_API_URL || DEFAULT_API_URL) {
     this.baseURL = baseURL;
     this.defaultHeaders = {
       'Content-Type': 'application/json',
@@ -89,7 +93,7 @@ class APIClient {
       // Handle network errors
       console.error(`❌ API Network Error: ${config.method || 'GET'} ${url}`, error);
       throw new APIError(
-        'Network error - check if backend is running on http://localhost:8000',
+        `Network error - check if backend is running on ${this.baseURL}`,
         0,
         null
       );

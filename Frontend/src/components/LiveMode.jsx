@@ -8,7 +8,8 @@ import CrateBuilder from './CrateBuilder';
 import { makeSupabaseCoverUrl } from '../utils/coverUrl';
 import { IconMic, IconPlus, IconClose, IconSend, IconVector, IconPlay, IconPause, IconSearch, IconEdit } from './icons';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL
+  || (import.meta.env.DEV ? 'http://localhost:8000' : 'https://djmate.onrender.com');
 
 // ── Shared helpers ─────────────────────────────────────────────────────────
 function getAudioSrc(track) {

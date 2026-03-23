@@ -7,7 +7,8 @@ import TagEditor from './TagEditor';
 import { makeSupabaseCoverUrl } from '../utils/coverUrl';
 import { IconPlay, IconPause, IconSearch, IconClose, IconSend, IconUp, IconDown, IconEdit } from './icons';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL
+  || (import.meta.env.DEV ? 'http://localhost:8000' : 'https://djmate.onrender.com');
 
 // Aliases for DJChatbox (was IconPlayFill/IconPauseFill with size=10)
 const IconPlayFill = () => <IconPlay size={10} />;

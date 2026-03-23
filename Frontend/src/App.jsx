@@ -358,7 +358,9 @@ function AppMain({ reducedMotion, onReconfigure }) {
       }
     }
     // Fallback: backend audio endpoint (works in local dev)
-    return `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/tracks/${node.id}/audio`;
+    const base = import.meta.env.VITE_API_URL
+      || (import.meta.env.DEV ? 'http://localhost:8000' : 'https://djmate.onrender.com');
+    return `${base}/tracks/${node.id}/audio`;
   }, []);
 
   const handleNodeClick = useCallback((node) => {
