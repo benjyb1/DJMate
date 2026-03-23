@@ -1,121 +1,114 @@
-# DJMate Setup Guide
+# DJMate Setup
 
-Set up your own DJMate instance with your personal music library. You'll need a Supabase account and a copy of this repo.
+Get your own DJMate running with your music library. Takes about 20 minutes.
 
-## Prerequisites
+You'll need: Python 3.11, Chrome/Edge/Brave, a free [Supabase](https://supabase.com) account.
 
-- Python 3.10+
-- Chrome, Edge, or Brave (for local audio playback)
-- A Supabase account (free tier works)
+---
 
-## Step 1: Create a Supabase Project
+## 1. Supabase project
 
-1. Go to [supabase.com](https://supabase.com) and sign in (or create an account)
-2. Click **New Project**
-3. Pick a name (e.g. "djmate"), set a database password, choose a region close to you
-4. Wait for it to finish provisioning (~1 minute)
+1. [supabase.com](https://supabase.com) → **New Project** → name it whatever, pick a region near you
+2. Once it's provisioned, go to **SQL Editor** → paste the entire contents of [`schema.sql`](https://github.com/benjyb1/DJMate/blob/main/schema.sql) → **Run**
+3. Go to **Storage** → **New Bucket** → name it `album-covers` → set to **Public** → **Create**
+4. Go to **Project Settings > API** and note down:
+   - **Project URL** (`https://something.supabase.co`)
+   - **anon key** (the long JWT under "Project API keys") — this one goes in the browser
+   - **service_role key** (the other long JWT) — this one goes in your `.env`, never share it
 
-## Step 2: Set Up the Database Schema
+## 2. Clone and install
 
-1. In your Supabase dashboard, go to **SQL Editor**
-2. Open the `schema.sql` file from this repo
-3. Paste the entire contents into the editor
-4. Click **Run**
+```bash
+git clone https://github.com/benjyb1/DJMate.git
+cd DJMate
+pip install -r configuration/requirements-scripts.txt
+```
 
-This creates the tables, indexes, and functions DJMate needs.
+### Essentia (the annoying one)
 
-## Step 3: Create a Storage Bucket for Album Art
+Essentia doesn't install cleanly with a normal `pip install`. What works:
 
-1. In Supabase, go to **Storage**
-2. Click **New Bucket**
-3. Name it `album-covers`
-4. Set it to **Public**
-5. Click **Create**
+```bash
+pip install essentia-tensorflow
+```
 
-(Audio files stay on your local machine — no need to upload them.)
+If that fails (it probably will on some systems), try:
 
-## Step 4: Get Your API Keys
+```bash
+# macOS with Homebrew
+brew install essentia
 
-1. Go to **Project Settings** > **API**
-2. You need two keys:
-   - **Project URL** — looks like `https://abcdefg.supabase.co`
-   - **anon / public key** — the long JWT token under "Project API keys"
+# Or use the pre-built wheel (Python 3.11 only)
+pip install https://essentia.upf.edu/python/essentia-2.1b6.dev1389-cp311-cp311-macosx_11_0_arm64.whl
 
-You'll also need the **service_role key** for the analysis scripts (keep this secret, never share it).
+# Linux
+pip install essentia-tensorflow
+```
 
-## Step 5: Analyse Your Music
+If you're on Windows, honestly use WSL. Essentia on native Windows is not worth the fight.
 
-1. Clone this repo:
-   ```bash
-   git clone https://github.com/benjyb1/DJMate.git
-   cd DJMate
-   ```
+### Download the embedding model
 
-2. Copy the environment template and fill in your keys:
-   ```bash
-   cp .env.example .env
-   ```
+```bash
+mkdir -p models
+curl -o models/discogs-effnet-bs64.pb \
+  https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs-effnet-bs64-1.pb
+```
 
-   Edit `.env`:
-   ```
-   SUPABASE_URL=https://your-project.supabase.co
-   SUPABASE_KEY=your-service-role-key-here
-   ```
+## 3. Configure
 
-   **Important:** Use the **service_role** key here (not the anon key). The analysis scripts need write access.
+```bash
+cp .env.example .env
+```
 
-3. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+Edit `.env`:
+```
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-service-role-key-here
+```
 
-4. Run the analysis pipeline on your music folder:
-   ```bash
-   python scripts/ingest_music.py /path/to/your/music
-   ```
+Use the **service_role** key here (not the anon key). The scripts need write access.
 
-   This will:
-   - Scan for audio files (MP3, FLAC, WAV, etc.)
-   - Extract metadata (BPM, key, title, artist)
-   - Generate embeddings for similarity search
-   - Upload everything to your Supabase database
+## 4. Ingest your music
 
-   Depending on your library size, this can take a while. A few hundred tracks usually finishes in under 10 minutes.
+```bash
+python scripts/ingest_music.py /path/to/your/music/folder
+```
 
-## Step 6: Connect to the Website
+This scans for audio files, extracts BPM/key/metadata, generates embeddings, and uploads everything to your Supabase. A few hundred tracks takes about 10 minutes.
 
-1. Open [DJMate](https://djmate-frontend.vercel.app) in Chrome
-2. You'll see a setup screen asking for your Supabase credentials
-3. Paste your **Project URL** and **anon key** (NOT the service_role key)
-4. Click **Connect**
-5. Grant access to your music folder when prompted (this lets DJMate play audio directly from your computer)
-6. You're in — your 3D music graph should load with all your tracks
+Useful flags:
+- `--dry-run` — see what would happen without writing anything
+- `--skip-audio-upload` — don't upload audio files to Supabase Storage (saves time if you're only using local playback)
+- `--skip-auto-tag` — skip the LLM auto-tagging step
+
+## 5. Open the website
+
+1. Go to [djmate-frontend.vercel.app](https://djmate-frontend.vercel.app) in **Chrome**
+2. Paste your **Project URL** and **anon key** (not the service_role key)
+3. Click **Connect**
+4. Click **Select Music Folder** and pick the folder with your audio files
+5. Your 3D music graph should load
+
+The music folder step lets DJMate play audio straight from your hard drive — nothing gets uploaded. Chrome will ask to re-confirm access when you come back (one click).
+
+---
 
 ## Troubleshooting
 
-**No tracks showing up?**
-- Check that the analysis script completed without errors
-- Verify your Supabase URL and anon key are correct (not the service_role key)
-- Check the browser console for errors (F12 > Console)
+**No tracks?** Check the ingest script finished without errors. Check your anon key is correct.
 
-**Audio not playing?**
-- Make sure you're using Chrome, Edge, or Brave (Firefox and Safari don't support the File System Access API)
-- Make sure you granted access to the correct music folder (the one containing your audio files)
-- Try clicking the settings gear in the nav bar to reconfigure your music folder
+**Can't connect?** Make sure you ran `schema.sql` first. The URL should be `https://something.supabase.co` (with the https).
 
-**"Connection failed" on the setup screen?**
-- Double-check your Supabase URL format: `https://your-project.supabase.co`
-- Make sure you ran `schema.sql` in the SQL editor first
-- Check that your anon key is the full JWT token (it's quite long)
+**No audio?** Must be Chrome/Edge/Brave (Firefox and Safari don't support local file access). Make sure you picked the right folder. Click the gear icon in the nav to reconfigure.
 
-## Key Concepts
+**Backend slow on first load?** The shared backend runs on Render's free tier — it sleeps after inactivity. First request takes 30-50 seconds to wake up. Subsequent requests are fast.
 
-**anon key vs service_role key:**
-- **anon key** (public): Safe to use in the browser. Limited by Row Level Security policies. Used when connecting via the website.
-- **service_role key** (secret): Full database access, bypasses RLS. Used only in the analysis scripts running on your machine. Never share this or put it in a browser.
+## Two keys, two purposes
 
-**Where does my data live?**
-- Your music files stay on your computer. DJMate plays them directly from your disc using the File System Access API.
-- Track metadata, embeddings, and coordinates live in your Supabase database.
-- Album art (if uploaded) lives in your Supabase Storage bucket.
-- The DJMate website and backend are shared infrastructure — they don't store any of your data.
+| Key | Where it goes | What it does |
+|-----|--------------|--------------|
+| **anon key** | Browser (setup screen) | Read-only-ish, safe to use client-side |
+| **service_role key** | `.env` file on your machine | Full database access, used by ingest scripts |
+
+Never put the service_role key in a browser. Never share it.
