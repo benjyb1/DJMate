@@ -32,15 +32,17 @@ from backend.ingest_router import router as ingest_router
 
 logger = logging.getLogger(__name__)
 
-db_manager = get_db()
-
 
 @asynccontextmanager
 async def lifespan(app):
+    # DB init happens here (after uvicorn binds the port) rather than at
+    # module-import time.  This lets Render's port scanner detect :10000
+    # immediately instead of waiting for Supabase + Redis round-trips.
     logger.info("DJMate API starting up...")
+    db_manager = get_db()
     try:
         test = db_manager.client.table("tracks").select("trackid").limit(1).execute()
-        logger.info(f"Database connection OK")
+        logger.info("Database connection OK")
     except Exception as e:
         logger.error(f"Database startup check failed: {e}")
     yield
