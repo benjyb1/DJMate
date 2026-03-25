@@ -168,4 +168,33 @@ body, html, #root {
     transition-duration: 0.01ms !important;
   }
 }
+/* ── Mobile / iPhone Safari ─────────────────────────────── */
+
+/* Safe area insets for iPhone notch/home indicator */
+body, html, #root {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* Prevent iOS bounce/overscroll */
+body {
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Fix 100vh on mobile Safari (address bar causes overflow) */
+@supports (height: 100dvh) {
+  body, html, #root {
+    height: 100dvh;
+  }
+}
+
+@media (max-width: 768px) {
+  /* Disable hover effects on touch (prevents sticky :hover on iOS) */
+  @media (hover: none) {
+    *:hover {
+      /* let framer-motion handle interactions instead */
+    }
+  }
+}
+
 /* Modern UI redesign deployed */

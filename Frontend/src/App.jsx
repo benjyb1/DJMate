@@ -194,6 +194,7 @@ function InlineEdit({ value, onSave, suggestions, type = 'text', color = '#00d4f
 }
 
 const NAV_TABS = ['DISCOVERY', 'LIVE', 'PLAYLISTS'];
+const NAV_TABS_SHORT = { DISCOVERY: 'DISCOVER', LIVE: 'LIVE', PLAYLISTS: 'LISTS' };
 
 export default function App() {
   const reducedMotion = useReducedMotion();
@@ -212,13 +213,26 @@ export default function App() {
   }} />;
 }
 
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= breakpoint);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const handler = (e) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 function AppMain({ reducedMotion, onReconfigure }) {
+  const isMobile = useIsMobile();
   const fgRef      = useRef();
   const chatboxRef = useRef(null);
   const audioRef   = useRef(null);
   const texCache     = useRef({});
   const spriteMapRef = useRef({});
   const prevBlobUrl  = useRef(null);
+  const engineStoppedOnce = useRef(false);
 
   const [trackData,     setTrackData]     = useState({ nodes: [], links: [] });
   const [allNodes,      setAllNodes]      = useState([]);
@@ -273,8 +287,9 @@ function AppMain({ reducedMotion, onReconfigure }) {
 
   // ── Track container size for ForceGraph ────────────────────────────────
   useEffect(() => {
-    const onResize = () => setGraphDims({ w: window.innerWidth, h: window.innerHeight - 80 });
+    const onResize = () => setGraphDims({ w: window.innerWidth, h: window.innerHeight });
     window.addEventListener('resize', onResize);
+    onResize(); // set initial size
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
@@ -598,7 +613,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
 
   // ── Main UI ─────────────────────────────────────────────────────────────
   return (
-    <div style={{ width: '100vw', height: '100vh', background: '#050507', position: 'relative', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ width: '100vw', height: '100dvh', background: '#050507', position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
       {/* ═══════════ FLOATING PILL NAV ═══════════ */}
       <m.div
@@ -606,7 +621,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
         animate={{ opacity: 1, y: 0 }}
         transition={{ type: 'spring', damping: 25, stiffness: 300, delay: 0.1 }}
         style={{
-          position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
+          position: 'absolute', top: isMobile ? 8 : 16, left: '50%', transform: 'translateX(-50%)',
           zIndex: 200,
           background: 'var(--glass-bg)',
           backdropFilter: 'blur(28px)',
@@ -614,28 +629,32 @@ function AppMain({ reducedMotion, onReconfigure }) {
           border: '1px solid var(--glass-border)',
           borderRadius: 'var(--radius-pill)',
           boxShadow: 'var(--shadow-float)',
-          display: 'flex', alignItems: 'center', gap: 4,
-          padding: '6px 8px',
+          display: 'flex', alignItems: 'center', gap: isMobile ? 2 : 4,
+          padding: isMobile ? '4px 4px' : '6px 8px',
+          maxWidth: isMobile ? 'calc(100vw - 16px)' : undefined,
+          overflow: 'hidden',
         }}
       >
         {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 12px 0 8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 3 : 6, padding: isMobile ? '0 4px' : '0 12px 0 8px' }}>
           <div style={{
-            width: 26, height: 26, borderRadius: 'var(--radius-sm)',
+            width: isMobile ? 20 : 26, height: isMobile ? 20 : 26, borderRadius: 'var(--radius-sm)',
             background: 'linear-gradient(135deg, rgba(124,58,237,0.25), rgba(0,212,255,0.15))',
             border: '1px solid rgba(124,58,237,0.3)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
             <IconWaveform />
           </div>
-          <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: '0.12em' }}>
-            <span style={{ color: '#e2e8f0' }}>DJ</span>
-            <span style={{ color: '#a855f7' }}>MATE</span>
-          </span>
+          {!isMobile && (
+            <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: '0.12em' }}>
+              <span style={{ color: '#e2e8f0' }}>DJ</span>
+              <span style={{ color: '#a855f7' }}>MATE</span>
+            </span>
+          )}
         </div>
 
         {/* Divider */}
-        <div style={{ width: 1, height: 24, background: 'var(--border-panel)', margin: '0 4px' }} />
+        {!isMobile && <div style={{ width: 1, height: 24, background: 'var(--border-panel)', margin: '0 4px' }} />}
 
         {/* Nav tabs with sliding indicator */}
         <div style={{ display: 'flex', gap: 2, position: 'relative', padding: '2px' }}>
@@ -647,16 +666,16 @@ function AppMain({ reducedMotion, onReconfigure }) {
               whileTap={{ scale: 0.97 }}
               style={{
                 background: 'none', border: 'none', cursor: 'pointer',
-                padding: '8px 20px', position: 'relative', zIndex: 1,
-                fontSize: 11, fontWeight: 600, letterSpacing: '0.12em',
+                padding: isMobile ? '6px 8px' : '8px 20px', position: 'relative', zIndex: 1,
+                fontSize: isMobile ? 9 : 11, fontWeight: 600, letterSpacing: isMobile ? '0.06em' : '0.12em',
                 fontFamily: "'Inter', system-ui, sans-serif",
                 color: activeTab === tab ? '#e2e8f0' : '#475569',
                 borderRadius: 'var(--radius-pill)',
                 transition: 'color 200ms ease',
-                display: 'flex', alignItems: 'center', gap: 6,
+                display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 6,
               }}
             >
-              {tab}
+              {isMobile ? NAV_TABS_SHORT[tab] : tab}
               {tab === 'LIVE' && setList.length > 0 && (
                 <div style={{
                   width: 6, height: 6, borderRadius: '50%', background: '#ef4444',
@@ -683,10 +702,10 @@ function AppMain({ reducedMotion, onReconfigure }) {
         </div>
 
         {/* Divider */}
-        <div style={{ width: 1, height: 24, background: 'var(--border-panel)', margin: '0 4px' }} />
+        {!isMobile && <div style={{ width: 1, height: 24, background: 'var(--border-panel)', margin: '0 4px' }} />}
 
-        {/* Status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 8px 0 4px' }}>
+        {/* Status — hidden on mobile */}
+        {!isMobile && <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 8px 0 4px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <div style={{
               width: 6, height: 6, borderRadius: '50%', background: '#00d4ff',
@@ -717,7 +736,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
               <circle cx="12" cy="12" r="3"/>
             </svg>
           </m.button>
-        </div>
+        </div>}
       </m.div>
 
       {/* ═══════════ MAIN CONTENT ═══════════ */}
@@ -782,7 +801,10 @@ function AppMain({ reducedMotion, onReconfigure }) {
                 controlType="trackball"
                 onNodeClick={handleNodeClick}
                 onEngineStop={() => {
-                  fgRef.current?.zoomToFit(400, 100);
+                  if (!engineStoppedOnce.current) {
+                    engineStoppedOnce.current = true;
+                    fgRef.current?.zoomToFit(400, 100);
+                  }
                   const c = fgRef.current?.controls();
                   if (c) { c.maxDistance = 8000; c.minDistance = 10; }
 
@@ -810,8 +832,11 @@ function AppMain({ reducedMotion, onReconfigure }) {
               />
 
               {/* Hidden audio */}
+              {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
               <audio
                 ref={audioRef}
+                playsInline
+                preload="none"
                 onEnded={() => { setIsPlaying(false); setCurrentTime(0); }}
                 onError={() => { setIsPlaying(false); setCurrentTime(0); }}
                 onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
@@ -830,12 +855,15 @@ function AppMain({ reducedMotion, onReconfigure }) {
                     exit="exit"
                     transition={{ type: 'spring', damping: 25, stiffness: 300 }}
                     style={{
-                      position: 'absolute', top: 80, right: 20, zIndex: 100, width: 320,
+                      position: 'absolute',
+                      ...(isMobile
+                        ? { bottom: 0, left: 0, right: 0, zIndex: 100, width: '100%', maxHeight: '60vh', overflowY: 'auto', borderRadius: 'var(--radius-xl) var(--radius-xl) 0 0' }
+                        : { top: 80, right: 20, zIndex: 100, width: 320, borderRadius: 'var(--radius-xl)' }
+                      ),
                       background: 'var(--glass-bg)',
                       backdropFilter: 'blur(28px)',
                       WebkitBackdropFilter: 'blur(28px)',
                       border: '1px solid var(--glass-border)',
-                      borderRadius: 'var(--radius-xl)',
                       boxShadow: 'var(--shadow-float)',
                       overflow: 'hidden',
                     }}
@@ -1028,7 +1056,8 @@ function AppMain({ reducedMotion, onReconfigure }) {
             exit={{ opacity: 0, y: 20 }}
             transition={{ type: 'spring', damping: 25, stiffness: 300 }}
             style={{
-              position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+              position: 'absolute', bottom: isMobile ? 8 : 16,
+              left: '50%', transform: 'translateX(-50%)',
               zIndex: 200,
               background: 'var(--glass-bg)',
               backdropFilter: 'blur(24px)',
@@ -1036,7 +1065,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
               border: '1px solid var(--glass-border)',
               borderRadius: 'var(--radius-pill)',
               boxShadow: 'var(--shadow-panel)',
-              display: 'flex', alignItems: 'center', gap: 16,
+              display: isMobile ? 'none' : 'flex', alignItems: 'center', gap: 16,
               padding: '8px 20px',
               fontFamily: "'JetBrains Mono', monospace",
               fontSize: 10, letterSpacing: '0.08em',

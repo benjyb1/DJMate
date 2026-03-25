@@ -689,9 +689,9 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
             exit="exit"
             transition={panelTransition}
             style={{
-              position: 'absolute', bottom: 80, left: 20, zIndex: 1001,
-              width: 380,
-              maxHeight: 'calc(100vh - 160px)',
+              position: 'absolute', bottom: 80, left: 20, right: 20, zIndex: 1001,
+              width: 'min(380px, calc(100vw - 40px))',
+              maxHeight: 'calc(100dvh - 160px)',
               display: 'flex', flexDirection: 'column',
               background: 'var(--glass-bg)',
               border: '1px solid var(--glass-border)',
