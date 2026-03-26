@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { m, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { supabase } from './utils/supabaseClient';
+import { supabase, getSupabase } from './utils/supabaseClient';
 import { resetSupabaseClient } from './utils/supabaseClient';
 import ForceGraph3D from 'react-force-graph-3d';
 import * as THREE from 'three';
@@ -343,7 +343,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
     (async () => {
       try {
         setIsLoading(true);
-        if (!supabase) throw new Error('Supabase not configured — check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY');
+        if (!getSupabase()) throw new Error('Supabase not connected — link your project first');
         const { data, error: err } = await supabase
           .from('tracks')
           .select('trackid,title,artist,bpm,key,album_art_url,audio_url,x_coord,y_coord,z_coord,track_labels(energy,semantic_tags,vibe),track_features(mfcc)');

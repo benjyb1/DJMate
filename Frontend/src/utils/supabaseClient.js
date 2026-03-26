@@ -28,10 +28,19 @@ export function resetSupabaseClient() {
 
 // Backwards compat — files that import { supabase } get a proxy
 // that delegates to the current dynamic client.
+// The proxy is falsy-safe: checking `if (!supabase)` won't work (Proxy is
+// always truthy), so use `getSupabase()` for null-checks instead.
 export const supabase = new Proxy({}, {
   get(_, prop) {
     const client = getSupabase();
-    if (!client) return undefined;
+    if (!client) {
+      if (prop === 'from') {
+        // Return a no-op that throws a clear error instead of
+        // "undefined is not a function"
+        return () => { throw new Error('Supabase not connected — link your project first'); };
+      }
+      return undefined;
+    }
     const val = client[prop];
     // Bind methods so `this` stays correct
     return typeof val === 'function' ? val.bind(client) : val;
