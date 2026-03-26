@@ -6,6 +6,7 @@ import { supabase } from '../../utils/supabaseClient';
 import PlaylistSidebar from './PlaylistSidebar';
 import ActivePlaylistPanel from './ActivePlaylistPanel';
 import SuggestionsPanel from './SuggestionsPanel';
+import SuggestedPlaylistsPanel from './SuggestedPlaylistsPanel';
 import PlaylistChatBar from './PlaylistChatBar';
 
 export default function PlaylistOrganiser() {
@@ -317,40 +318,51 @@ export default function PlaylistOrganiser() {
         {/* ═══════════ MAIN AREA (split vertical) ═══════════ */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-          {/* TOP HALF — Active Playlist Workspace */}
-          <ActivePlaylistPanel
-            playlist={activePlaylistId ? { id: activePlaylistId, name: activePlaylistName } : null}
-            tracks={activePlaylistTracks}
-            playingTrackId={playingTrackId}
-            onPlay={handlePlayTrack}
-            onDropTracks={handleDropTracksOnActive}
-            onRemoveTrack={handleRemoveTrack}
-            onCreatePlaylist={handleCreatePlaylist}
-            onRenamePlaylist={handleRenamePlaylist}
-            searchFilter={searchFilter}
-            onSearchChange={setSearchFilter}
-          />
+          {activePlaylistId ? (
+            <>
+              {/* TOP HALF — Active Playlist Workspace */}
+              <ActivePlaylistPanel
+                playlist={{ id: activePlaylistId, name: activePlaylistName }}
+                tracks={activePlaylistTracks}
+                playingTrackId={playingTrackId}
+                onPlay={handlePlayTrack}
+                onDropTracks={handleDropTracksOnActive}
+                onRemoveTrack={handleRemoveTrack}
+                onCreatePlaylist={handleCreatePlaylist}
+                onRenamePlaylist={handleRenamePlaylist}
+                searchFilter={searchFilter}
+                onSearchChange={setSearchFilter}
+              />
 
-          {/* BOTTOM HALF — LLM Suggestions */}
-          <SuggestionsPanel
-            suggestions={suggestions}
-            loading={suggestionsLoading}
-            activePlaylistName={activePlaylistId ? activePlaylistName : null}
-            onCreatePlaylist={handleCreatePlaylistFromSuggestion}
-            onAddTrack={handleAddSuggestionTrack}
-            onAddAll={handleAddAllSuggestions}
-            playingTrackId={playingTrackId}
-            onPlay={handlePlayTrack}
-          />
+              {/* BOTTOM HALF — LLM Suggestions */}
+              <SuggestionsPanel
+                suggestions={suggestions}
+                loading={suggestionsLoading}
+                activePlaylistName={activePlaylistName}
+                onCreatePlaylist={handleCreatePlaylistFromSuggestion}
+                onAddTrack={handleAddSuggestionTrack}
+                onAddAll={handleAddAllSuggestions}
+                playingTrackId={playingTrackId}
+                onPlay={handlePlayTrack}
+              />
 
-          {/* CHAT BAR (fixed at bottom) */}
-          <PlaylistChatBar
-            query={chatQuery}
-            onQueryChange={setChatQuery}
-            status={chatStatus}
-            feedback={chatFeedback}
-            onSubmit={handleChatSubmit}
-          />
+              {/* CHAT BAR (fixed at bottom) */}
+              <PlaylistChatBar
+                query={chatQuery}
+                onQueryChange={setChatQuery}
+                status={chatStatus}
+                feedback={chatFeedback}
+                onSubmit={handleChatSubmit}
+              />
+            </>
+          ) : (
+            /* NO ACTIVE PLAYLIST — Show suggested playlists */
+            <SuggestedPlaylistsPanel
+              onCreatePlaylist={handleCreatePlaylistFromSuggestion}
+              playingTrackId={playingTrackId}
+              onPlay={handlePlayTrack}
+            />
+          )}
         </div>
       </div>
     </LazyMotion>
