@@ -335,54 +335,56 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
           fetchPool={fetchPool}
         />
 
-        {/* ═══════════ MAIN AREA (split vertical) ═══════════ */}
+        {/* ═══════════ MAIN AREA (always: workspace top + chat bottom) ═══════════ */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-          {activePlaylistId ? (
-            <>
-              {/* TOP HALF — Active Playlist Workspace */}
-              <ActivePlaylistPanel
-                playlist={{ id: activePlaylistId, name: activePlaylistName }}
-                tracks={activePlaylistTracks}
-                playingTrackId={playingTrackId}
-                onPlay={handlePlayTrack}
-                onDropTracks={handleDropTracksOnActive}
-                onRemoveTrack={handleRemoveTrack}
-                onCreatePlaylist={handleCreatePlaylist}
-                onRenamePlaylist={handleRenamePlaylist}
-                searchFilter={searchFilter}
-                onSearchChange={setSearchFilter}
-              />
+          {/* TOP — Active Playlist Workspace */}
+          <ActivePlaylistPanel
+            playlist={activePlaylistId ? { id: activePlaylistId, name: activePlaylistName } : null}
+            tracks={activePlaylistTracks}
+            playingTrackId={playingTrackId}
+            onPlay={handlePlayTrack}
+            onDropTracks={handleDropTracksOnActive}
+            onRemoveTrack={handleRemoveTrack}
+            onCreatePlaylist={handleCreatePlaylist}
+            onRenamePlaylist={handleRenamePlaylist}
+            searchFilter={searchFilter}
+            onSearchChange={setSearchFilter}
+          />
 
-              {/* BOTTOM HALF — LLM Suggestions */}
-              <SuggestionsPanel
-                suggestions={suggestions}
-                loading={suggestionsLoading}
-                activePlaylistName={activePlaylistName}
-                onCreatePlaylist={handleCreatePlaylistFromSuggestion}
-                onAddTrack={handleAddSuggestionTrack}
-                onAddAll={handleAddAllSuggestions}
-                playingTrackId={playingTrackId}
-                onPlay={handlePlayTrack}
-              />
+          {/* BOTTOM — LLM Suggestions from chat */}
+          <SuggestionsPanel
+            suggestions={suggestions}
+            loading={suggestionsLoading}
+            activePlaylistName={activePlaylistName}
+            onCreatePlaylist={handleCreatePlaylistFromSuggestion}
+            onAddTrack={handleAddSuggestionTrack}
+            onAddAll={handleAddAllSuggestions}
+            playingTrackId={playingTrackId}
+            onPlay={handlePlayTrack}
+          />
 
-              {/* CHAT BAR (fixed at bottom) */}
-              <PlaylistChatBar
-                query={chatQuery}
-                onQueryChange={setChatQuery}
-                status={chatStatus}
-                feedback={chatFeedback}
-                onSubmit={handleChatSubmit}
-              />
-            </>
-          ) : (
-            /* NO ACTIVE PLAYLIST — Show suggested playlists */
-            <SuggestedPlaylistsPanel
-              onCreatePlaylist={handleCreatePlaylistFromSuggestion}
-              playingTrackId={playingTrackId}
-              onPlay={handlePlayTrack}
-            />
-          )}
+          {/* CHAT BAR (fixed at bottom) */}
+          <PlaylistChatBar
+            query={chatQuery}
+            onQueryChange={setChatQuery}
+            status={chatStatus}
+            feedback={chatFeedback}
+            onSubmit={handleChatSubmit}
+          />
+        </div>
+
+        {/* ═══════════ RIGHT SIDEBAR — AI Suggested Playlists ═══════════ */}
+        <div style={{
+          width: 240, flexShrink: 0, overflow: 'hidden',
+          borderLeft: '1px solid var(--glass-border)',
+          display: 'flex', flexDirection: 'column',
+        }}>
+          <SuggestedPlaylistsPanel
+            onCreatePlaylist={handleCreatePlaylistFromSuggestion}
+            playingTrackId={playingTrackId}
+            onPlay={handlePlayTrack}
+          />
         </div>
       </div>
     </LazyMotion>
