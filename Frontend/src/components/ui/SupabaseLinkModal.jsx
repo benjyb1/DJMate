@@ -6,7 +6,11 @@ const API_BASE = import.meta.env.VITE_API_URL
   || (import.meta.env.DEV ? 'http://localhost:8000' : 'https://djmate.onrender.com');
 
 async function testConnection(url, key) {
-  const client = createClient(url, key);
+  // Disable session persistence so this throwaway client doesn't
+  // overwrite the central Supabase client's auth in localStorage
+  const client = createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
   const { error } = await client.from('tracks').select('trackid').limit(1);
   if (error) {
     // Table doesn't exist — user needs to set up schema

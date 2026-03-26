@@ -72,12 +72,19 @@ export const useAuthStore = create((set, get) => ({
 
   linkSupabase: async (url, key) => {
     const userId = get().session?.user?.id;
-    if (!userId) return;
-    const { error } = await centralSupabase
+    if (!userId) throw new Error('Not signed in');
+
+    // Use .select() so we can verify the row was actually updated
+    const { data, error } = await centralSupabase
       .from('profiles')
       .update({ supabase_url: url, supabase_key: key })
-      .eq('id', userId);
+      .eq('id', userId)
+      .select()
+      .single();
+
     if (error) throw error;
+    if (!data) throw new Error('Profile update returned no data — row may not exist');
+
     set(s => ({ profile: { ...s.profile, supabase_url: url, supabase_key: key } }));
   },
 
