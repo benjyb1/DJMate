@@ -9,7 +9,7 @@ import SuggestionsPanel from './SuggestionsPanel';
 import SuggestedPlaylistsPanel from './SuggestedPlaylistsPanel';
 import PlaylistChatBar from './PlaylistChatBar';
 
-export default function PlaylistOrganiser() {
+export default function PlaylistOrganiser({ onIngestComplete }) {
   // ── Data ──────────────────────────────────────────────────────────────
   const [allPlaylists, setAllPlaylists] = useState([]);
   const [poolTracks, setPoolTracks] = useState([]);
@@ -311,6 +311,7 @@ export default function PlaylistOrganiser() {
           onDeletePlaylist={handleDeletePlaylist}
           onDropOnPlaylist={handleDropTracksOnActive}
           onExport={handleExport}
+          onIngestComplete={onIngestComplete}
           fetchTree={fetchTree}
           fetchPool={fetchPool}
         />

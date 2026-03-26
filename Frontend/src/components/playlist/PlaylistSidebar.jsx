@@ -272,6 +272,7 @@ export default function PlaylistSidebar({
   onDropOnPlaylist,
   onExport,
   onStartIngest,
+  onIngestComplete,
   fetchTree,
   fetchPool,
 }) {
@@ -395,6 +396,7 @@ export default function PlaylistSidebar({
               if (fetchPool) fetchPool();
               if (fetchTree) fetchTree();
               useAuthStore.getState().setImportedLibrary();
+              if (onIngestComplete) onIngestComplete();
             }
           }
         } catch { /* ignore poll errors */ }
@@ -403,7 +405,7 @@ export default function PlaylistSidebar({
       setIngestStatus('error');
       setIngestLog(prev => [...prev, `Failed to start: ${err.message}`]);
     }
-  }, [ingestFolder, fetchPool, fetchTree]);
+  }, [ingestFolder, fetchPool, fetchTree, onIngestComplete]);
 
   useEffect(() => {
     return () => { if (ingestPollRef.current) clearInterval(ingestPollRef.current); };

@@ -5,7 +5,7 @@ import sys
 import os
 import logging
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
 
@@ -33,7 +33,7 @@ class IngestRequest(BaseModel):
 
 
 @router.post("/start")
-async def start_ingest(req: IngestRequest):
+async def start_ingest(req: IngestRequest, request: Request):
     """Kick off the ingest_music.py pipeline as a background subprocess."""
     if _ingest_state["status"] == "running":
         raise HTTPException(status_code=409, detail="Ingestion already running")
@@ -53,6 +53,14 @@ async def start_ingest(req: IngestRequest):
     if req.skip_fingerprints:
         cmd.append("--skip-fingerprints")
 
+    # Extract tenant credentials from headers and pass to subprocess
+    sb_url = request.headers.get("x-supabase-url", "")
+    sb_key = request.headers.get("x-supabase-key", "")
+    env = os.environ.copy()
+    if sb_url and sb_key:
+        env["SUPABASE_URL"] = sb_url
+        env["SUPABASE_KEY"] = sb_key
+
     # Reset state
     _ingest_state["status"] = "running"
     _ingest_state["folder"] = str(folder)
@@ -60,12 +68,12 @@ async def start_ingest(req: IngestRequest):
     _ingest_state["process"] = None
 
     # Launch in background
-    asyncio.get_event_loop().create_task(_run_ingest(cmd))
+    asyncio.get_event_loop().create_task(_run_ingest(cmd, env=env))
 
     return {"status": "started", "folder": str(folder)}
 
 
-async def _run_ingest(cmd: list[str]):
+async def _run_ingest(cmd: list[str], env: dict | None = None):
     """Run the ingest subprocess and capture output line-by-line."""
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -73,6 +81,7 @@ async def _run_ingest(cmd: list[str]):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(PROJECT_ROOT),
+            env=env,
         )
         _ingest_state["process"] = proc
 

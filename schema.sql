@@ -20,6 +20,7 @@ create table if not exists tracks (
   key           text,
   duration      real,
   album_art_url text,
+  audio_url     text,
   embedding     vector(1536),
   x_coord       real,        -- precomputed UMAP 3D coordinate
   y_coord       real,
@@ -36,6 +37,13 @@ create table if not exists track_labels (
   tag_source     text,                        -- 'auto', 'manual', 'auto_reviewed'
   created_at     timestamptz default now(),
   updated_at     timestamptz default now()
+);
+
+-- track_features: audio fingerprints (MFCC, etc.)
+create table if not exists track_features (
+  trackid    text primary key references tracks(trackid) on delete cascade,
+  mfcc       float8[],
+  created_at timestamptz default now()
 );
 
 -- tag_corrections: audit log of user edits (online learning)
@@ -92,6 +100,27 @@ create table if not exists crate_tracks (
   crate_id  text not null references crates(id) on delete cascade,
   trackid   text not null references tracks(trackid) on delete cascade,
   position  integer not null default 0
+);
+
+-- ── Tag operations tables ────────────────────────────────────────────────
+
+-- tag_operations_log: audit log for batch tagging operations
+create table if not exists tag_operations_log (
+  id          bigint generated always as identity primary key,
+  operation   text not null,
+  params      jsonb,
+  result      jsonb,
+  created_at  timestamptz default now()
+);
+
+-- tag_track_feedback: per-track label corrections from the UI
+create table if not exists tag_track_feedback (
+  id          bigint generated always as identity primary key,
+  trackid     text references tracks(trackid) on delete cascade,
+  field       text,
+  old_value   text,
+  new_value   text,
+  created_at  timestamptz default now()
 );
 
 -- ── Indexes ─────────────────────────────────────────────────────────────────
@@ -165,24 +194,30 @@ $$;
 -- ── Row Level Security ──────────────────────────────────────────────────────
 -- Each user owns their own Supabase project, so anon gets full access.
 
-alter table tracks           enable row level security;
-alter table track_labels     enable row level security;
-alter table tag_corrections  enable row level security;
-alter table playlists        enable row level security;
-alter table playlist_tracks  enable row level security;
-alter table crate_sessions   enable row level security;
-alter table crates           enable row level security;
-alter table crate_tracks     enable row level security;
+alter table tracks             enable row level security;
+alter table track_labels       enable row level security;
+alter table track_features     enable row level security;
+alter table tag_corrections    enable row level security;
+alter table playlists          enable row level security;
+alter table playlist_tracks    enable row level security;
+alter table crate_sessions     enable row level security;
+alter table crates             enable row level security;
+alter table crate_tracks       enable row level security;
+alter table tag_operations_log enable row level security;
+alter table tag_track_feedback enable row level security;
 
 -- Allow anon (and authenticated) full read/write on all tables
-create policy "anon full access" on tracks          for all using (true) with check (true);
-create policy "anon full access" on track_labels    for all using (true) with check (true);
-create policy "anon full access" on tag_corrections for all using (true) with check (true);
-create policy "anon full access" on playlists       for all using (true) with check (true);
-create policy "anon full access" on playlist_tracks for all using (true) with check (true);
-create policy "anon full access" on crate_sessions  for all using (true) with check (true);
-create policy "anon full access" on crates          for all using (true) with check (true);
-create policy "anon full access" on crate_tracks    for all using (true) with check (true);
+create policy "anon full access" on tracks             for all using (true) with check (true);
+create policy "anon full access" on track_labels       for all using (true) with check (true);
+create policy "anon full access" on track_features     for all using (true) with check (true);
+create policy "anon full access" on tag_corrections    for all using (true) with check (true);
+create policy "anon full access" on playlists          for all using (true) with check (true);
+create policy "anon full access" on playlist_tracks    for all using (true) with check (true);
+create policy "anon full access" on crate_sessions     for all using (true) with check (true);
+create policy "anon full access" on crates             for all using (true) with check (true);
+create policy "anon full access" on crate_tracks       for all using (true) with check (true);
+create policy "anon full access" on tag_operations_log for all using (true) with check (true);
+create policy "anon full access" on tag_track_feedback for all using (true) with check (true);
 
 -- ── Storage (manual step) ───────────────────────────────────────────────────
 -- Supabase Storage buckets cannot be created via SQL. After running this
