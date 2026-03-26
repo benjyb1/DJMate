@@ -61,7 +61,10 @@ async def lifespan(app):
 app = FastAPI(title="AI DJ Curation API", version="2.0.0", lifespan=lifespan)
 
 # Configure CORS
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+CORS_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://localhost:3000,https://djmate.vercel.app",
+).split(",")
 
 app.add_middleware(
     CORSMiddleware,
