@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { m } from 'framer-motion';
 import { useAuthStore } from '../stores/authStore';
 import { syncFromProfile } from '../stores/credentialStore';
+import { isFileSystemAccessSupported, pickMusicFolder } from '../utils/localAudio';
+import { apiClient } from '../api/apiClient';
 import SupabaseLinkModal from './ui/SupabaseLinkModal';
 
 const labelStyle = {
@@ -114,6 +116,22 @@ export default function ProfileTab() {
     setEditingName(false);
   };
 
+  const [scanStatus, setScanStatus] = useState(null); // null | 'picking' | 'done' | 'error'
+
+  const handleRescan = async () => {
+    if (!isFileSystemAccessSupported()) {
+      setScanStatus('error');
+      return;
+    }
+    try {
+      setScanStatus('picking');
+      await pickMusicFolder();
+      setScanStatus('done');
+    } catch {
+      setScanStatus(null); // user cancelled
+    }
+  };
+
   const handleLink = async (url, key) => {
     await linkSupabase(url, key);
     syncFromProfile({ ...profile, supabase_url: url, supabase_key: key });
@@ -185,9 +203,19 @@ export default function ProfileTab() {
             {libraryImported ? 'Library imported' : 'No library imported yet'}
           </span>
         </div>
-        <m.button style={secondaryBtnStyle} {...hoverTap} onClick={() => {/* wired in Task 9 */}}>
-          Re-scan Library
+        <m.button style={secondaryBtnStyle} {...hoverTap} onClick={handleRescan} disabled={scanStatus === 'picking'}>
+          {scanStatus === 'picking' ? 'Selecting folder...' : 'Re-scan Library'}
         </m.button>
+        {scanStatus === 'done' && (
+          <p style={{ fontSize: 11, color: '#4ade80', margin: '8px 0 0', fontFamily: 'Inter, sans-serif' }}>
+            Folder linked for local playback
+          </p>
+        )}
+        {scanStatus === 'error' && (
+          <p style={{ fontSize: 11, color: '#f87171', margin: '8px 0 0', fontFamily: 'Inter, sans-serif' }}>
+            Folder picker requires Chrome, Edge, or Arc
+          </p>
+        )}
       </div>
 
       {/* Account */}

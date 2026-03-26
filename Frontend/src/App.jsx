@@ -888,49 +888,29 @@ function AppMain({ reducedMotion, onReconfigure }) {
                 nodeLabel={nodeLabel}
               />
 
-              {/* Onboarding overlay */}
-              {(!profile?.supabase_url || !profile?.has_imported_library) && (
+              {/* Onboarding overlay — hide once tracks are loaded */}
+              {!profile?.supabase_url && allNodes.length === 0 && (
                 <div style={{
                   position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
                   zIndex: 100, textAlign: 'center',
                   display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center',
                 }}>
-                  {!profile?.supabase_url && (
-                    <m.button
-                      onClick={() => setShowLinkModal(true)}
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.97 }}
-                      style={{
-                        padding: '14px 32px',
-                        background: 'linear-gradient(135deg, rgba(124,58,237,0.3), rgba(0,212,255,0.15))',
-                        border: '1px solid rgba(124,58,237,0.3)',
-                        borderRadius: 'var(--radius-sm)',
-                        color: '#e2e8f0', fontSize: 14, fontWeight: 600,
-                        cursor: 'pointer', fontFamily: "'Inter', system-ui, sans-serif",
-                        backdropFilter: 'blur(16px)',
-                      }}
-                    >
-                      Link Supabase
-                    </m.button>
-                  )}
-                  {profile?.supabase_url && !profile?.has_imported_library && (
-                    <m.button
-                      onClick={handleUploadLibrary}
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.97 }}
-                      style={{
-                        padding: '14px 32px',
-                        background: 'linear-gradient(135deg, rgba(0,212,255,0.2), rgba(124,58,237,0.15))',
-                        border: '1px solid rgba(0,212,255,0.3)',
-                        borderRadius: 'var(--radius-sm)',
-                        color: '#00d4ff', fontSize: 14, fontWeight: 600,
-                        cursor: 'pointer', fontFamily: "'Inter', system-ui, sans-serif",
-                        backdropFilter: 'blur(16px)',
-                      }}
-                    >
-                      Upload Library
-                    </m.button>
-                  )}
+                  <m.button
+                    onClick={() => setShowLinkModal(true)}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.97 }}
+                    style={{
+                      padding: '14px 32px',
+                      background: 'linear-gradient(135deg, rgba(124,58,237,0.3), rgba(0,212,255,0.15))',
+                      border: '1px solid rgba(124,58,237,0.3)',
+                      borderRadius: 'var(--radius-sm)',
+                      color: '#e2e8f0', fontSize: 14, fontWeight: 600,
+                      cursor: 'pointer', fontFamily: "'Inter', system-ui, sans-serif",
+                      backdropFilter: 'blur(16px)',
+                    }}
+                  >
+                    Link Supabase
+                  </m.button>
                 </div>
               )}
 

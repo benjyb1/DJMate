@@ -5,6 +5,7 @@ import { apiClient } from '../../api/apiClient';
 import GlassPanel from '../ui/GlassPanel';
 import { buildTree, buildFileTree } from './helpers';
 import { useAuthStore } from '../../stores/authStore';
+import { isFileSystemAccessSupported, pickMusicFolder } from '../../utils/localAudio';
 
 // ── SVG icons ────────────────────────────────────────────────────────────────
 const ChevronIcon = ({ open }) => (
@@ -616,111 +617,28 @@ export default function PlaylistSidebar({
       {/* ── Import Music Folder ──────────────────────────────────── */}
       <div style={{ padding: '8px 12px', borderTop: '1px solid var(--glass-border)' }}>
         <m.button
-          onClick={() => setShowIngest(v => !v)}
+          onClick={async () => {
+            if (!isFileSystemAccessSupported()) return;
+            try {
+              await pickMusicFolder();
+            } catch { /* user cancelled */ }
+          }}
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.97 }}
           style={{
             width: '100%', padding: '10px 0',
-            background: ingestStatus === 'running'
-              ? 'linear-gradient(135deg, rgba(0,212,255,0.25), rgba(124,58,237,0.2))'
-              : 'linear-gradient(135deg, rgba(0,212,255,0.12), rgba(124,58,237,0.08))',
-            border: ingestStatus === 'running'
-              ? '1px solid rgba(0,212,255,0.5)'
-              : '1px solid rgba(0,212,255,0.25)',
+            background: 'linear-gradient(135deg, rgba(0,212,255,0.12), rgba(124,58,237,0.08))',
+            border: '1px solid rgba(0,212,255,0.25)',
             borderRadius: 'var(--radius-sm)',
             color: '#e2e8f0', fontSize: 12, fontWeight: 700,
             cursor: 'pointer', fontFamily: 'var(--font-ui)',
             letterSpacing: '0.05em',
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-            animation: ingestStatus === 'running' ? 'glowPulse 1.5s ease-in-out infinite' : 'none',
           }}
         >
           <UploadIcon />
-          {ingestStatus === 'running' ? 'Ingesting...' : profile?.has_imported_library ? 'Re-scan Library' : 'Import Music Folder'}
+          {profile?.has_imported_library ? 'Re-scan Library' : 'Import Music Folder'}
         </m.button>
-
-        <AnimatePresence>
-          {showIngest && (
-            <m.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              style={{ overflow: 'hidden' }}
-            >
-              <div
-                style={{
-                  marginTop: 8, padding: 12,
-                  borderRadius: 'var(--radius-sm)',
-                  background: 'rgba(8,8,20,0.3)',
-                  textAlign: 'center',
-                }}
-              >
-                <input
-                  value={ingestFolder}
-                  onChange={e => setIngestFolder(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && ingestFolder.trim()) startIngest(); }}
-                  placeholder="/path/to/music/folder"
-                  disabled={ingestStatus === 'running'}
-                  style={{
-                    width: '100%', boxSizing: 'border-box', padding: '7px 10px',
-                    background: 'rgba(255,255,255,0.06)', border: '1px solid var(--glass-border)',
-                    borderRadius: 'var(--radius-sm)', color: '#e2e8f0', fontSize: 11,
-                    fontFamily: 'var(--font-mono)', outline: 'none',
-                  }}
-                />
-                <m.button
-                  onClick={() => startIngest()}
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.97 }}
-                  disabled={ingestStatus === 'running' || !ingestFolder.trim()}
-                  style={{
-                    marginTop: 8, width: '100%', padding: '8px 0',
-                    background: ingestStatus === 'running' ? 'rgba(100,116,139,0.2)' : 'rgba(0,212,255,0.15)',
-                    border: '1px solid rgba(0,212,255,0.3)', borderRadius: 'var(--radius-sm)',
-                    color: ingestStatus === 'running' ? '#475569' : '#00d4ff',
-                    fontSize: 11, fontWeight: 700,
-                    cursor: ingestStatus === 'running' ? 'wait' : 'pointer',
-                    fontFamily: 'var(--font-ui)', letterSpacing: '0.08em',
-                  }}
-                >
-                  {ingestStatus === 'running' ? 'INGESTING...' : 'START SCAN'}
-                </m.button>
-              </div>
-
-              {ingestLog.length > 0 && (
-                <div style={{
-                  marginTop: 8, maxHeight: 120, overflowY: 'auto',
-                  background: 'rgba(8,8,20,0.5)', borderRadius: 'var(--radius-sm)',
-                  padding: '6px 8px', border: '1px solid var(--glass-border)',
-                }}>
-                  {ingestLog.slice(-20).map((line, i) => (
-                    <div key={i} style={{
-                      fontSize: 9,
-                      color: line.includes('ERROR') || line.includes('\u2717') ? '#f87171'
-                        : line.includes('\u2713') || line.includes('\u2705') ? '#4ade80'
-                          : '#64748b',
-                      fontFamily: 'var(--font-mono)', lineHeight: 1.5,
-                      whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-                    }}>
-                      {line}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {ingestStatus !== 'idle' && ingestStatus !== 'running' && (
-                <div style={{
-                  marginTop: 6, textAlign: 'center', fontSize: 10, fontWeight: 700,
-                  fontFamily: 'var(--font-mono)',
-                  color: ingestStatus === 'done' ? '#4ade80' : '#f87171',
-                }}>
-                  {ingestStatus === 'done' ? 'INGEST COMPLETE' : 'INGEST FAILED'}
-                </div>
-              )}
-            </m.div>
-          )}
-        </AnimatePresence>
       </div>
 
       {/* Export button */}
