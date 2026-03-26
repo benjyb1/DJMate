@@ -1,6 +1,6 @@
 // Frontend/src/stores/authStore.js
 import { create } from 'zustand';
-import { centralSupabase } from '../utils/centralSupabase';
+import { centralSupabase, CENTRAL_URL, CENTRAL_KEY } from '../utils/centralSupabase';
 
 export const useAuthStore = create((set, get) => ({
   session: null,
@@ -71,19 +71,32 @@ export const useAuthStore = create((set, get) => ({
   },
 
   linkSupabase: async (url, key) => {
-    const userId = get().session?.user?.id;
-    if (!userId) throw new Error('Not signed in');
+    const session = get().session;
+    if (!session?.user?.id) throw new Error('Not signed in');
 
-    // Use .select() so we can verify the row was actually updated
-    const { data, error } = await centralSupabase
-      .from('profiles')
-      .update({ supabase_url: url, supabase_key: key })
-      .eq('id', userId)
-      .select()
-      .single();
+    // Direct fetch to PostgREST — bypasses the Supabase client's auth
+    // middleware which can hang if the token refresh cycle is broken
+    const resp = await fetch(
+      `${CENTRAL_URL}/rest/v1/profiles?id=eq.${session.user.id}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': CENTRAL_KEY,
+          'Authorization': `Bearer ${session.access_token}`,
+          'Prefer': 'return=representation',
+        },
+        body: JSON.stringify({ supabase_url: url, supabase_key: key }),
+      },
+    );
 
-    if (error) throw error;
-    if (!data) throw new Error('Profile update returned no data — row may not exist');
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      throw new Error(`Failed to save credentials (${resp.status}): ${body}`);
+    }
+
+    const rows = await resp.json();
+    if (!rows?.length) throw new Error('Profile update affected no rows');
 
     set(s => ({ profile: { ...s.profile, supabase_url: url, supabase_key: key } }));
   },
