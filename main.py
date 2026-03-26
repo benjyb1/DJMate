@@ -29,6 +29,7 @@ from backend.tag_router import router as tag_router
 from backend.crate_router import router as crate_router
 from backend.playlist_router import router as playlist_router
 from backend.ingest_router import router as ingest_router
+from backend.setup_router import router as setup_router
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ app.include_router(tag_router, prefix="/tags", tags=["tags"])
 app.include_router(crate_router, prefix="/crates", tags=["crates"])
 app.include_router(playlist_router, prefix="/playlists", tags=["playlists"])
 app.include_router(ingest_router, prefix="/ingest", tags=["ingest"])
+app.include_router(setup_router, prefix="/setup", tags=["setup"])
 # ── Request models ────────────────────────────────────────────────────────────
 
 class NaturalLanguageQuery(BaseModel):

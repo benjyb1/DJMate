@@ -270,6 +270,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
   const [availableTags, setAvailableTags] = useState([]);
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [toast, setToast] = useState({ visible: false, message: '' });
+  const [graphVersion, setGraphVersion] = useState(0);
 
   const handleUploadLibrary = async () => {
     if (!isFileSystemAccessSupported()) {
@@ -391,7 +392,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
         setIsLoading(false);
       }
     })();
-  }, [profile?.supabase_url]);
+  }, [profile?.supabase_url, graphVersion]);
 
   useEffect(() => {
     if (audioRef.current) { audioRef.current.pause(); setIsPlaying(false); }
@@ -810,7 +811,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
               transition={{ duration: 0.25 }}
               style={{ position: 'absolute', inset: 0 }}
             >
-              <PlaylistOrganiser />
+              <PlaylistOrganiser onIngestComplete={() => setGraphVersion(v => v + 1)} />
             </m.div>
           )}
 
