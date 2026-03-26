@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { LazyMotion, domAnimation } from 'framer-motion';
 import { apiClient } from '../../api/apiClient';
+import { supabase } from '../../utils/supabaseClient';
 import PlaylistSidebar from './PlaylistSidebar';
 import ActivePlaylistPanel from './ActivePlaylistPanel';
 import SuggestionsPanel from './SuggestionsPanel';
@@ -11,6 +12,7 @@ export default function PlaylistOrganiser() {
   // ── Data ──────────────────────────────────────────────────────────────
   const [allPlaylists, setAllPlaylists] = useState([]);
   const [poolTracks, setPoolTracks] = useState([]);
+  const [poolLoading, setPoolLoading] = useState(true);
 
   // Active playlist (shown in top half)
   const [activePlaylistId, setActivePlaylistId] = useState(null);
@@ -46,11 +48,39 @@ export default function PlaylistOrganiser() {
 
   const fetchPool = useCallback(async () => {
     try {
+      setPoolLoading(true);
+      // Fetch directly from Supabase (faster than going through backend)
+      if (supabase) {
+        const { data, error } = await supabase
+          .from('tracks')
+          .select('trackid, title, artist, bpm, key, filepath, track_labels(energy, semantic_tags, vibe)');
+        if (!error && data) {
+          const tracks = data.map(row => {
+            const labels = row.track_labels || {};
+            return {
+              trackid: row.trackid,
+              title: row.title || '',
+              artist: row.artist || '',
+              bpm: row.bpm,
+              key: row.key,
+              filepath: row.filepath || '',
+              energy: labels.energy,
+              semantic_tags: labels.semantic_tags,
+              vibe: labels.vibe,
+            };
+          });
+          setPoolTracks(tracks);
+          return;
+        }
+      }
+      // Fallback to backend API
       const data = await apiClient.get('/playlists/pool');
       const tracks = Array.isArray(data) ? data : data.tracks || [];
       setPoolTracks(tracks);
     } catch (err) {
       console.error('Failed to fetch pool:', err);
+    } finally {
+      setPoolLoading(false);
     }
   }, []);
 
@@ -273,6 +303,7 @@ export default function PlaylistOrganiser() {
         <PlaylistSidebar
           allPlaylists={allPlaylists}
           poolTracks={poolTracks}
+          poolLoading={poolLoading}
           activePlaylistId={activePlaylistId}
           onSelectPlaylist={handleSelectPlaylist}
           onCreatePlaylist={handleCreatePlaylist}

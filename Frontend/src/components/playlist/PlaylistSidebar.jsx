@@ -263,6 +263,7 @@ function LibraryTreeNode({ node, depth, selectedId, expandedIds, onToggleExpand,
 export default function PlaylistSidebar({
   allPlaylists,
   poolTracks,
+  poolLoading,
   activePlaylistId,
   onSelectPlaylist,
   onCreatePlaylist,
@@ -445,7 +446,13 @@ export default function PlaylistSidebar({
         }}>
           LIBRARY
         </span>
-        <span style={{ fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+        <span style={{ fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: 6 }}>
+          {poolLoading && (
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ animation: 'spin 1s linear infinite' }}>
+              <circle cx="8" cy="8" r="6" stroke="rgba(124,58,237,0.25)" strokeWidth="2" />
+              <path d="M14 8a6 6 0 0 0-6-6" stroke="#a855f7" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          )}
           {poolTracks.length}
         </span>
       </div>
@@ -475,6 +482,20 @@ export default function PlaylistSidebar({
 
       {/* Library folder tree */}
       <div style={{ overflowY: 'auto', padding: '2px 0', maxHeight: '40vh' }}>
+        {poolLoading && poolTracks.length === 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            gap: 8, padding: '16px 12px',
+          }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ animation: 'spin 1s linear infinite' }}>
+              <circle cx="8" cy="8" r="6" stroke="rgba(124,58,237,0.25)" strokeWidth="2" />
+              <path d="M14 8a6 6 0 0 0-6-6" stroke="#a855f7" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'var(--font-mono)' }}>
+              Loading library...
+            </span>
+          </div>
+        )}
         {fileTreeRoots.map(node => (
           <LibraryTreeNode
             key={node.id}
@@ -487,7 +508,7 @@ export default function PlaylistSidebar({
             tracksByPath={tracksByPath}
           />
         ))}
-        {poolTracks.length > 0 && fileTreeRoots.length === 0 && (
+        {!poolLoading && poolTracks.length > 0 && fileTreeRoots.length === 0 && (
           <div style={{
             padding: '8px 12px', fontSize: 10, color: '#475569',
             fontFamily: 'var(--font-ui)', fontStyle: 'italic',
