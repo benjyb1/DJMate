@@ -5,7 +5,10 @@ import { apiClient } from '../api/apiClient';
 import GlassPanel from './ui/GlassPanel';
 import TagEditor from './TagEditor';
 import CrateBuilder from './CrateBuilder';
+import Toast from './ui/Toast';
 import { makeSupabaseCoverUrl } from '../utils/coverUrl';
+import { useAuthStore } from '../stores/authStore';
+import { isFileSystemAccessSupported, pickMusicFolder } from '../utils/localAudio';
 import { IconMic, IconPlus, IconClose, IconSend, IconVector, IconPlay, IconPause, IconSearch, IconEdit } from './icons';
 
 const API_BASE = import.meta.env.VITE_API_URL
@@ -692,6 +695,10 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
   const [availableTags, setAvailableTags] = useState([]);
   const [availableVibes, setAvailableVibes] = useState([]);
   const [liveSubMode, setLiveSubMode]     = useState('tracker');
+  const [uploadToast, setUploadToast]     = useState({ visible: false, message: '' });
+
+  const profile = useAuthStore(s => s.profile);
+  const setImportedLibrary = useAuthStore(s => s.setImportedLibrary);
 
   const micStreamRef     = useRef(null);
   const audioCtxRef      = useRef(null);
@@ -966,6 +973,7 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', height: '100%',
+      paddingTop: 60,
       color: '#e2e8f0',
       fontFamily: "'Inter', system-ui, sans-serif", overflow: 'hidden',
     }}>
@@ -978,13 +986,8 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
         flexShrink: 0, borderRadius: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
-          <div>
-            <div style={{ fontSize: 8, letterSpacing: '0.3em', color: 'rgba(124,58,237,0.6)', fontFamily: "'JetBrains Mono', monospace", marginBottom: 3 }}>
-              LIVE SESSION
-            </div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>
-              {liveSubMode === 'tracker' ? 'SET TRACKER' : 'CRATE BUILDER'}
-            </div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0' }}>
+            {liveSubMode === 'tracker' ? 'SET TRACKER' : 'CRATE BUILDER'}
           </div>
 
           {/* Mode toggle pill */}
@@ -1034,6 +1037,32 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
             </div>
           )}
         </div>
+
+        {/* Upload Library prompt (only if not imported yet) */}
+        {!profile?.has_imported_library && (
+          <m.button
+            onClick={async () => {
+              if (!isFileSystemAccessSupported()) {
+                setUploadToast({ visible: true, message: 'Local folder access requires Chrome, Edge, or Arc' });
+                return;
+              }
+              try { await pickMusicFolder(); } catch {}
+            }}
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.97 }}
+            style={{
+              padding: '6px 14px',
+              background: 'rgba(0,212,255,0.1)',
+              border: '1px solid rgba(0,212,255,0.2)',
+              borderRadius: 'var(--radius-sm)',
+              color: '#00d4ff', fontSize: 10, fontWeight: 600,
+              cursor: 'pointer', fontFamily: "'Inter', system-ui, sans-serif",
+              letterSpacing: '0.06em',
+            }}
+          >
+            Upload Library
+          </m.button>
+        )}
 
         {/* Listen toggle */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -1408,6 +1437,12 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
       </AnimatePresence>
       </>
       )}
+
+      <Toast
+        message={uploadToast.message}
+        visible={uploadToast.visible}
+        onDismiss={() => setUploadToast({ visible: false, message: '' })}
+      />
     </div>
   );
 }
