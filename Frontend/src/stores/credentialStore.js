@@ -20,3 +20,11 @@ export function clearCredentials() {
   localStorage.removeItem(STORAGE_KEY_URL);
   localStorage.removeItem(STORAGE_KEY_KEY);
 }
+
+export function syncFromProfile(profile) {
+  if (profile?.supabase_url && profile?.supabase_key) {
+    saveCredentials(profile.supabase_url, profile.supabase_key);
+  } else {
+    clearCredentials();
+  }
+}
