@@ -12,7 +12,7 @@ function TrackRow({ track, isSelected, isPlaying, onSelect, onPlay, onDragStart,
     <div
       draggable="true"
       onDragStart={(e) => onDragStart(e, track.trackid || track.id)}
-      onClick={onSelect}
+      onClick={() => { onSelect(); onPlay(); }}
       style={{
         display: 'flex', alignItems: 'center', gap: 10,
         padding: '6px 12px',

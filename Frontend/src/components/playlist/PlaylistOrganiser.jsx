@@ -3,6 +3,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { LazyMotion, domAnimation } from 'framer-motion';
 import { apiClient } from '../../api/apiClient';
 import { supabase } from '../../utils/supabaseClient';
+import { getLocalAudioUrl, hasMusicFolder } from '../../utils/localAudio';
+import { useAudioPreloader } from '../../hooks/useAudioPreloader';
 import PlaylistSidebar from './PlaylistSidebar';
 import ActivePlaylistPanel from './ActivePlaylistPanel';
 import SuggestionsPanel from './SuggestionsPanel';
@@ -24,9 +26,10 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
   const [suggestions, setSuggestions] = useState(null);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
 
-  // Audio
+  // Audio — preload URLs for the active playlist so playback is instant
   const audioRef = useRef(new Audio());
   const [playingTrackId, setPlayingTrackId] = useState(null);
+  const { getUrl: getPreloadedUrl } = useAudioPreloader(activePlaylistTracks);
 
   // Chat
   const [chatQuery, setChatQuery] = useState('');
@@ -180,21 +183,37 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
     }
   }, [activePlaylistId, loadPlaylistTracks, fetchTree]);
 
-  // ── Audio playback ────────────────────────────────────────────────────
-  const handlePlayTrack = useCallback((track) => {
+  // ── Audio playback (uses preloaded URLs for instant start) ───────────
+  const API_BASE = import.meta.env.VITE_API_URL
+    || (import.meta.env.DEV ? 'http://localhost:8000' : 'https://djmate.onrender.com');
+
+  const handlePlayTrack = useCallback(async (track) => {
     const trackId = track.trackid || track.id;
+
+    // Toggle off if already playing this track
     if (playingTrackId === trackId) {
       audioRef.current.pause();
       setPlayingTrackId(null);
-    } else {
-      const audioUrl = track.filepath || track.audio_url || '';
-      if (audioUrl) {
-        audioRef.current.src = audioUrl;
-        audioRef.current.play().catch(() => {});
-        setPlayingTrackId(trackId);
-      }
+      return;
     }
-  }, [playingTrackId]);
+
+    // 1. Try preloaded cache first (instant)
+    let url = getPreloadedUrl(trackId);
+
+    // 2. Fallback: resolve on-demand via local filesystem
+    if (!url && track.filepath) {
+      url = await getLocalAudioUrl(track.filepath);
+    }
+
+    // 3. Last resort: backend streaming endpoint
+    if (!url) {
+      url = `${API_BASE}/tracks/${trackId}/audio`;
+    }
+
+    audioRef.current.src = url;
+    audioRef.current.play().catch(() => setPlayingTrackId(null));
+    setPlayingTrackId(trackId);
+  }, [playingTrackId, getPreloadedUrl]);
 
   // ── Export folders to disk ────────────────────────────────────────────
   const handleExport = useCallback(async () => {
