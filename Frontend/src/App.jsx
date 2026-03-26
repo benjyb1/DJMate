@@ -7,13 +7,17 @@ import * as THREE from 'three';
 import DJChatbox from './components/DJChatbox';
 import LiveMode from './components/LiveMode';
 import PlaylistOrganiser from './components/playlist/PlaylistOrganiser';
-import SetupScreen from './components/SetupScreen';
+import AuthScreen from './components/AuthScreen';
+import ProfileTab from './components/ProfileTab';
+import SupabaseLinkModal from './components/ui/SupabaseLinkModal';
+import Toast from './components/ui/Toast';
 import GlassPanel from './components/ui/GlassPanel';
 import { makeSupabaseCoverUrl } from './utils/coverUrl';
 import { IconPlay, IconPause, IconSearch, IconWaveform } from './components/icons';
 import { apiClient } from './api/apiClient';
-import { getCredentials, clearCredentials } from './stores/credentialStore';
-import { getLocalAudioUrl } from './utils/localAudio';
+import { useAuthStore } from './stores/authStore';
+import { getCredentials, clearCredentials, syncFromProfile } from './stores/credentialStore';
+import { getLocalAudioUrl, isFileSystemAccessSupported, pickMusicFolder } from './utils/localAudio';
 
 // ── Parse semantic_tags (handles array, JSON string, or CSV) ──────────────
 function parseTags(raw) {
@@ -193,23 +197,39 @@ function InlineEdit({ value, onSave, suggestions, type = 'text', color = '#00d4f
   );
 }
 
-const NAV_TABS = ['DISCOVERY', 'LIVE', 'PLAYLISTS'];
-const NAV_TABS_SHORT = { DISCOVERY: 'DISCOVER', LIVE: 'LIVE', PLAYLISTS: 'LISTS' };
+const NAV_TABS = ['DISCOVERY', 'LIVE', 'PLAYLISTS', 'PROFILE'];
+const NAV_TABS_SHORT = { DISCOVERY: 'DISCOVER', LIVE: 'LIVE', PLAYLISTS: 'LISTS', PROFILE: 'PROFILE' };
 
 export default function App() {
   const reducedMotion = useReducedMotion();
-  const [hasCredentials, setHasCredentials] = useState(() => getCredentials() !== null);
+  const { session, profile, loading, init, signOut } = useAuthStore();
 
-  // ── Setup gate: show onboarding if no Supabase creds ────────────────
-  if (!hasCredentials) {
-    return <SetupScreen onConnected={() => setHasCredentials(true)} />;
+  useEffect(() => { init(); }, []);
+
+  // Sync BYOS credentials from profile to localStorage whenever profile changes
+  useEffect(() => {
+    if (profile) {
+      syncFromProfile(profile);
+    }
+  }, [profile]);
+
+  if (loading) {
+    return (
+      <div style={{ width: '100vw', height: '100dvh', background: '#0a0a14', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: '#64748b', fontFamily: "'Inter', system-ui, sans-serif", fontSize: 14 }}>Loading...</div>
+      </div>
+    );
   }
 
-  return <AppMain reducedMotion={reducedMotion} onReconfigure={() => {
+  if (!session) {
+    return <AuthScreen />;
+  }
+
+  return <AppMain reducedMotion={reducedMotion} onReconfigure={async () => {
     clearCredentials();
     resetSupabaseClient();
     apiClient.clearCache();
-    setHasCredentials(false);
+    await signOut();
   }} />;
 }
 
@@ -226,6 +246,7 @@ function useIsMobile(breakpoint = 768) {
 
 function AppMain({ reducedMotion, onReconfigure }) {
   const isMobile = useIsMobile();
+  const { profile } = useAuthStore();
   const fgRef      = useRef();
   const chatboxRef = useRef(null);
   const audioRef   = useRef(null);
@@ -247,6 +268,21 @@ function AppMain({ reducedMotion, onReconfigure }) {
   const [currentTime,   setCurrentTime]   = useState(0);
   const [duration,      setDuration]      = useState(0);
   const [availableTags, setAvailableTags] = useState([]);
+  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [toast, setToast] = useState({ visible: false, message: '' });
+
+  const handleUploadLibrary = async () => {
+    if (!isFileSystemAccessSupported()) {
+      setToast({ visible: true, message: 'Local folder access requires Chrome, Edge, or Arc' });
+      return;
+    }
+    try {
+      await pickMusicFolder();
+      setActiveTab('PLAYLISTS');
+    } catch (err) {
+      // User cancelled folder picker
+    }
+  };
 
   // ── Fetch available tags for autocomplete ──────────────────────────────
   useEffect(() => {
@@ -719,25 +755,22 @@ function AppMain({ reducedMotion, onReconfigure }) {
           <span style={{ fontSize: 9, color: '#2d3748', fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.08em' }}>
             {allNodes.length} TRACKS
           </span>
-          {/* Reconfigure button */}
-          <m.button
-            onClick={onReconfigure}
-            whileHover={{ scale: 1.1, color: '#a855f7' }}
-            whileTap={{ scale: 0.9 }}
-            title="Change Supabase connection"
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              color: '#2d3748', padding: 2, display: 'flex', alignItems: 'center',
-              fontSize: 12, transition: 'color 200ms ease',
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-              <circle cx="12" cy="12" r="3"/>
-            </svg>
-          </m.button>
         </div>}
       </m.div>
+
+      {/* Username header */}
+      {profile?.username && (
+        <div style={{
+          position: 'absolute', top: isMobile ? 52 : 64, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 190,
+          fontSize: 11, color: 'rgba(226,232,240,0.4)',
+          fontFamily: "'JetBrains Mono', monospace",
+          letterSpacing: '0.1em',
+          pointerEvents: 'none',
+        }}>
+          {profile.username}&apos;s Space
+        </div>
+      )}
 
       {/* ═══════════ MAIN CONTENT ═══════════ */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
@@ -770,6 +803,21 @@ function AppMain({ reducedMotion, onReconfigure }) {
               style={{ position: 'absolute', inset: 0 }}
             >
               <PlaylistOrganiser />
+            </m.div>
+          )}
+
+          {/* ── PROFILE TAB ── */}
+          {activeTab === 'PROFILE' && (
+            <m.div
+              key="profile"
+              variants={tabVariants}
+              initial="initial"
+              animate="enter"
+              exit="exit"
+              transition={{ duration: 0.25 }}
+              style={{ position: 'absolute', inset: 0, overflowY: 'auto' }}
+            >
+              <ProfileTab />
             </m.div>
           )}
 
@@ -830,6 +878,52 @@ function AppMain({ reducedMotion, onReconfigure }) {
                 }}
                 nodeLabel={nodeLabel}
               />
+
+              {/* Onboarding overlay */}
+              {(!profile?.supabase_url || !profile?.has_imported_library) && (
+                <div style={{
+                  position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                  zIndex: 100, textAlign: 'center',
+                  display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center',
+                }}>
+                  {!profile?.supabase_url && (
+                    <m.button
+                      onClick={() => setShowLinkModal(true)}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.97 }}
+                      style={{
+                        padding: '14px 32px',
+                        background: 'linear-gradient(135deg, rgba(124,58,237,0.3), rgba(0,212,255,0.15))',
+                        border: '1px solid rgba(124,58,237,0.3)',
+                        borderRadius: 'var(--radius-sm)',
+                        color: '#e2e8f0', fontSize: 14, fontWeight: 600,
+                        cursor: 'pointer', fontFamily: "'Inter', system-ui, sans-serif",
+                        backdropFilter: 'blur(16px)',
+                      }}
+                    >
+                      Link Supabase
+                    </m.button>
+                  )}
+                  {profile?.supabase_url && !profile?.has_imported_library && (
+                    <m.button
+                      onClick={handleUploadLibrary}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.97 }}
+                      style={{
+                        padding: '14px 32px',
+                        background: 'linear-gradient(135deg, rgba(0,212,255,0.2), rgba(124,58,237,0.15))',
+                        border: '1px solid rgba(0,212,255,0.3)',
+                        borderRadius: 'var(--radius-sm)',
+                        color: '#00d4ff', fontSize: 14, fontWeight: 600,
+                        cursor: 'pointer', fontFamily: "'Inter', system-ui, sans-serif",
+                        backdropFilter: 'blur(16px)',
+                      }}
+                    >
+                      Upload Library
+                    </m.button>
+                  )}
+                </div>
+              )}
 
               {/* Hidden audio */}
               {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
@@ -1081,6 +1175,24 @@ function AppMain({ reducedMotion, onReconfigure }) {
           </m.div>
         )}
       </AnimatePresence>
+
+      <SupabaseLinkModal
+        open={showLinkModal}
+        onClose={() => setShowLinkModal(false)}
+        onLink={async (url, key) => {
+          await useAuthStore.getState().linkSupabase(url, key);
+          syncFromProfile(useAuthStore.getState().profile);
+          setShowLinkModal(false);
+        }}
+        defaultUrl={profile?.supabase_url || ''}
+        defaultKey={profile?.supabase_key || ''}
+      />
+
+      <Toast
+        message={toast.message}
+        visible={toast.visible}
+        onDismiss={() => setToast({ visible: false, message: '' })}
+      />
     </div>
   );
 }

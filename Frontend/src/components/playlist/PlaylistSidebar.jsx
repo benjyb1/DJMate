@@ -4,6 +4,7 @@ import { LazyMotion, domAnimation, m, AnimatePresence } from 'framer-motion';
 import { apiClient } from '../../api/apiClient';
 import GlassPanel from '../ui/GlassPanel';
 import { buildTree, buildFileTree } from './helpers';
+import { useAuthStore } from '../../stores/authStore';
 
 // ── SVG icons ────────────────────────────────────────────────────────────────
 const ChevronIcon = ({ open }) => (
@@ -273,6 +274,8 @@ export default function PlaylistSidebar({
   fetchTree,
   fetchPool,
 }) {
+  const profile = useAuthStore(s => s.profile);
+
   // Playlist tree
   const tree = useMemo(() => buildTree(allPlaylists), [allPlaylists]);
 
@@ -295,7 +298,6 @@ export default function PlaylistSidebar({
   const [ingestFolder, setIngestFolder] = useState('');
   const [ingestStatus, setIngestStatus] = useState('idle');
   const [ingestLog, setIngestLog] = useState([]);
-  const [ingestDragOver, setIngestDragOver] = useState(false);
   const ingestPollRef = useRef(null);
 
   const [loadError, setLoadError] = useState(null);
@@ -391,6 +393,7 @@ export default function PlaylistSidebar({
               apiClient.clearCache();
               if (fetchPool) fetchPool();
               if (fetchTree) fetchTree();
+              useAuthStore.getState().setImportedLibrary();
             }
           }
         } catch { /* ignore poll errors */ }
@@ -403,21 +406,6 @@ export default function PlaylistSidebar({
 
   useEffect(() => {
     return () => { if (ingestPollRef.current) clearInterval(ingestPollRef.current); };
-  }, []);
-
-  const handleIngestDrop = useCallback((e) => {
-    e.preventDefault();
-    setIngestDragOver(false);
-    const items = e.dataTransfer?.items;
-    if (items?.length) {
-      const entry = items[0].webkitGetAsEntry?.();
-      if (entry?.isDirectory) {
-        setIngestFolder(entry.fullPath || entry.name);
-        return;
-      }
-    }
-    const text = e.dataTransfer?.getData('text/plain')?.trim();
-    if (text) setIngestFolder(text);
   }, []);
 
   return (
@@ -625,7 +613,7 @@ export default function PlaylistSidebar({
           }}
         >
           <UploadIcon />
-          {ingestStatus === 'running' ? 'Ingesting...' : 'Import Music Folder'}
+          {ingestStatus === 'running' ? 'Ingesting...' : profile?.has_imported_library ? 'Re-scan Library' : 'Import Music Folder'}
         </m.button>
 
         <AnimatePresence>
@@ -638,22 +626,13 @@ export default function PlaylistSidebar({
               style={{ overflow: 'hidden' }}
             >
               <div
-                onDragOver={(e) => { e.preventDefault(); setIngestDragOver(true); }}
-                onDragLeave={() => setIngestDragOver(false)}
-                onDrop={handleIngestDrop}
                 style={{
                   marginTop: 8, padding: 12,
-                  border: ingestDragOver
-                    ? '2px dashed rgba(0,212,255,0.7)'
-                    : '2px dashed rgba(124,58,237,0.25)',
                   borderRadius: 'var(--radius-sm)',
-                  background: ingestDragOver ? 'rgba(0,212,255,0.06)' : 'rgba(8,8,20,0.3)',
-                  textAlign: 'center', transition: 'all 150ms ease',
+                  background: 'rgba(8,8,20,0.3)',
+                  textAlign: 'center',
                 }}
               >
-                <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'var(--font-ui)', marginBottom: 8 }}>
-                  Drop a folder here or paste its path
-                </div>
                 <input
                   value={ingestFolder}
                   onChange={e => setIngestFolder(e.target.value)}

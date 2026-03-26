@@ -267,7 +267,7 @@ export default function PlaylistOrganiser() {
   // ── Render ────────────────────────────────────────────────────────────
   return (
     <LazyMotion features={domAnimation}>
-      <div style={{ display: 'flex', height: '100%', gap: 0 }}>
+      <div style={{ display: 'flex', height: '100%', gap: 0, paddingTop: 60 }}>
 
         {/* ═══════════ LEFT SIDEBAR ═══════════ */}
         <PlaylistSidebar
