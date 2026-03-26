@@ -286,10 +286,11 @@ function AppMain({ reducedMotion, onReconfigure }) {
 
   // ── Fetch available tags for autocomplete ──────────────────────────────
   useEffect(() => {
+    if (!profile?.supabase_url) return;
     apiClient.get('/tags/available').then(data => {
       setAvailableTags(data.semantic_tags || []);
     }).catch(() => {});
-  }, []);
+  }, [profile?.supabase_url]);
 
   // ── Save label edit + trigger online learning ──────────────────────────
   const handleLabelSave = useCallback(async (field, value) => {
@@ -329,8 +330,15 @@ function AppMain({ reducedMotion, onReconfigure }) {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // ── Load data ────────────────────────────────────────────────────────────
+  // ── Load data (only if Supabase is linked) ──────────────────────────────
   useEffect(() => {
+    if (!profile?.supabase_url) {
+      setIsLoading(false);
+      setAllNodes([]);
+      setAllLinks([]);
+      setTrackData({ nodes: [], links: [] });
+      return;
+    }
     (async () => {
       try {
         setIsLoading(true);
@@ -383,7 +391,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
         setIsLoading(false);
       }
     })();
-  }, []);
+  }, [profile?.supabase_url]);
 
   useEffect(() => {
     if (audioRef.current) { audioRef.current.pause(); setIsPlaying(false); }
@@ -740,8 +748,8 @@ function AppMain({ reducedMotion, onReconfigure }) {
         {/* Divider */}
         {!isMobile && <div style={{ width: 1, height: 24, background: 'var(--border-panel)', margin: '0 4px' }} />}
 
-        {/* Status — hidden on mobile */}
-        {!isMobile && <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 8px 0 4px' }}>
+        {/* Status — hidden on mobile, only show when tracks loaded */}
+        {!isMobile && allNodes.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 8px 0 4px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <div style={{
               width: 6, height: 6, borderRadius: '50%', background: '#00d4ff',
