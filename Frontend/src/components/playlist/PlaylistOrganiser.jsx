@@ -21,6 +21,7 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
   const [activePlaylistId, setActivePlaylistId] = useState(null);
   const [activePlaylistName, setActivePlaylistName] = useState(null);
   const [activePlaylistTracks, setActivePlaylistTracks] = useState([]);
+  const [isUnsavedPlaylist, setIsUnsavedPlaylist] = useState(false);
 
   // LLM suggestions (shown in bottom half)
   const [suggestions, setSuggestions] = useState(null);
@@ -112,26 +113,39 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
 
   // ── Select playlist (from sidebar) ────────────────────────────────────
   const handleSelectPlaylist = useCallback((playlistId) => {
+    setIsUnsavedPlaylist(false);
     setActivePlaylistId(playlistId);
     setSearchFilter('');
     loadPlaylistTracks(playlistId);
   }, [loadPlaylistTracks]);
 
-  // ── Create empty playlist ─────────────────────────────────────────────
-  const handleCreatePlaylist = useCallback(async () => {
-    // This will be triggered by sidebar's + New or top half empty state
-    // The sidebar handles its own input UI; this is a fallback for top half
+  // ── Create unsaved playlist (local only, no API call) ────────────────
+  const handleCreateUnsavedPlaylist = useCallback(() => {
+    setIsUnsavedPlaylist(true);
+    setActivePlaylistId(null);
+    setActivePlaylistName('');
+    setActivePlaylistTracks([]);
+  }, []);
+
+  // ── Save unsaved playlist to backend ────────────────────────────────
+  const handleSavePlaylist = useCallback(async (name) => {
+    if (!name || !name.trim()) return;
     try {
-      const result = await apiClient.post('/playlists/create', { name: 'New Playlist' });
-      await fetchTree();
+      const result = await apiClient.post('/playlists/create', { name: name.trim() });
       if (result?.id) {
+        if (activePlaylistTracks.length > 0) {
+          const trackIds = activePlaylistTracks.map(t => t.trackid || t.id);
+          await apiClient.post(`/playlists/${result.id}/add-tracks`, { track_ids: trackIds });
+        }
+        setIsUnsavedPlaylist(false);
         setActivePlaylistId(result.id);
-        loadPlaylistTracks(result.id);
+        setActivePlaylistName(name.trim());
+        await fetchTree();
       }
     } catch (err) {
-      console.error('Failed to create playlist:', err);
+      console.error('Failed to save playlist:', err);
     }
-  }, [fetchTree, loadPlaylistTracks]);
+  }, [activePlaylistTracks, fetchTree]);
 
   // ── Delete playlist ───────────────────────────────────────────────────
   const handleDeletePlaylist = useCallback(async (playlistId) => {
@@ -161,6 +175,20 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
 
   // ── Drop tracks onto active playlist ──────────────────────────────────
   const handleDropTracksOnActive = useCallback(async (trackIds) => {
+    if (isUnsavedPlaylist) {
+      // Append locally, deduplicate by trackid
+      const existingIds = new Set(activePlaylistTracks.map(t => t.trackid || t.id));
+      const newTracks = trackIds
+        .filter(id => !existingIds.has(id))
+        .map(id => {
+          const found = poolTracks.find(t => (t.trackid || t.id) === id);
+          return found || { trackid: id, title: '', artist: '' };
+        });
+      if (newTracks.length > 0) {
+        setActivePlaylistTracks(prev => [...prev, ...newTracks]);
+      }
+      return;
+    }
     if (!activePlaylistId) return;
     try {
       await apiClient.post(`/playlists/${activePlaylistId}/add-tracks`, { track_ids: trackIds });
@@ -169,10 +197,14 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
     } catch (err) {
       console.error('Failed to add tracks:', err);
     }
-  }, [activePlaylistId, loadPlaylistTracks, fetchTree]);
+  }, [isUnsavedPlaylist, activePlaylistId, activePlaylistTracks, poolTracks, loadPlaylistTracks, fetchTree]);
 
   // ── Remove track from active playlist ─────────────────────────────────
   const handleRemoveTrack = useCallback(async (trackId) => {
+    if (isUnsavedPlaylist) {
+      setActivePlaylistTracks(prev => prev.filter(t => (t.trackid || t.id) !== trackId));
+      return;
+    }
     if (!activePlaylistId) return;
     try {
       await apiClient.post(`/playlists/${activePlaylistId}/remove-tracks`, { track_ids: [trackId] });
@@ -181,7 +213,7 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
     } catch (err) {
       console.error('Failed to remove track:', err);
     }
-  }, [activePlaylistId, loadPlaylistTracks, fetchTree]);
+  }, [isUnsavedPlaylist, activePlaylistId, loadPlaylistTracks, fetchTree]);
 
   // ── Audio playback (uses preloaded URLs for instant start) ───────────
   const API_BASE = import.meta.env.VITE_API_URL
@@ -235,8 +267,9 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
         await apiClient.post(`/playlists/${result.id}/add-tracks`, { track_ids: trackIds });
         await fetchTree();
         setActivePlaylistId(result.id);
+        setIsUnsavedPlaylist(false);
         await loadPlaylistTracks(result.id);
-        setSuggestions(null); // Clear suggestions after creating
+        // Do NOT clear suggestions — keep them visible
       }
     } catch (err) {
       console.error('Failed to create playlist from suggestions:', err);
@@ -245,6 +278,15 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
 
   // ── Add single suggestion track to active playlist ────────────────────
   const handleAddSuggestionTrack = useCallback(async (trackId) => {
+    if (isUnsavedPlaylist) {
+      const existingIds = new Set(activePlaylistTracks.map(t => t.trackid || t.id));
+      if (!existingIds.has(trackId)) {
+        const found = poolTracks.find(t => (t.trackid || t.id) === trackId);
+        const track = found || { trackid: trackId, title: '', artist: '' };
+        setActivePlaylistTracks(prev => [...prev, track]);
+      }
+      return;
+    }
     if (!activePlaylistId) return;
     try {
       await apiClient.post(`/playlists/${activePlaylistId}/add-tracks`, { track_ids: [trackId] });
@@ -253,10 +295,23 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
     } catch (err) {
       console.error('Failed to add track:', err);
     }
-  }, [activePlaylistId, loadPlaylistTracks, fetchTree]);
+  }, [isUnsavedPlaylist, activePlaylistId, activePlaylistTracks, poolTracks, loadPlaylistTracks, fetchTree]);
 
   // ── Add all suggestion tracks to active playlist ──────────────────────
   const handleAddAllSuggestions = useCallback(async (trackIds) => {
+    if (isUnsavedPlaylist) {
+      const existingIds = new Set(activePlaylistTracks.map(t => t.trackid || t.id));
+      const newTracks = trackIds
+        .filter(id => !existingIds.has(id))
+        .map(id => {
+          const found = poolTracks.find(t => (t.trackid || t.id) === id);
+          return found || { trackid: id, title: '', artist: '' };
+        });
+      if (newTracks.length > 0) {
+        setActivePlaylistTracks(prev => [...prev, ...newTracks]);
+      }
+      return;
+    }
     if (!activePlaylistId) return;
     try {
       await apiClient.post(`/playlists/${activePlaylistId}/add-tracks`, { track_ids: trackIds });
@@ -265,7 +320,7 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
     } catch (err) {
       console.error('Failed to add tracks:', err);
     }
-  }, [activePlaylistId, loadPlaylistTracks, fetchTree]);
+  }, [isUnsavedPlaylist, activePlaylistId, activePlaylistTracks, poolTracks, loadPlaylistTracks, fetchTree]);
 
   // ── Chat submit ───────────────────────────────────────────────────────
   const handleChatSubmit = useCallback(async (query) => {
@@ -293,7 +348,7 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
       if (usedSuggest) {
         // Set suggestions for bottom panel (preview mode)
         setSuggestions({
-          mode: data.mode || 'tracks',
+          mode: 'tracks',
           name: data.name || null,
           tracks: data.tracks || [],
         });
@@ -326,7 +381,7 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
           poolLoading={poolLoading}
           activePlaylistId={activePlaylistId}
           onSelectPlaylist={handleSelectPlaylist}
-          onCreatePlaylist={handleCreatePlaylist}
+          onCreateUnsavedPlaylist={handleCreateUnsavedPlaylist}
           onDeletePlaylist={handleDeletePlaylist}
           onDropOnPlaylist={handleDropTracksOnActive}
           onExport={handleExport}
@@ -340,14 +395,16 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
 
           {/* TOP — Active Playlist Workspace */}
           <ActivePlaylistPanel
-            playlist={activePlaylistId ? { id: activePlaylistId, name: activePlaylistName } : null}
+            playlist={activePlaylistId ? { id: activePlaylistId, name: activePlaylistName } : isUnsavedPlaylist ? { id: null, name: activePlaylistName } : null}
             tracks={activePlaylistTracks}
             playingTrackId={playingTrackId}
             onPlay={handlePlayTrack}
             onDropTracks={handleDropTracksOnActive}
             onRemoveTrack={handleRemoveTrack}
-            onCreatePlaylist={handleCreatePlaylist}
+            onCreatePlaylist={handleCreateUnsavedPlaylist}
             onRenamePlaylist={handleRenamePlaylist}
+            isUnsavedPlaylist={isUnsavedPlaylist}
+            onSavePlaylist={handleSavePlaylist}
             searchFilter={searchFilter}
             onSearchChange={setSearchFilter}
           />
@@ -357,7 +414,6 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
             suggestions={suggestions}
             loading={suggestionsLoading}
             activePlaylistName={activePlaylistName}
-            onCreatePlaylist={handleCreatePlaylistFromSuggestion}
             onAddTrack={handleAddSuggestionTrack}
             onAddAll={handleAddAllSuggestions}
             playingTrackId={playingTrackId}
@@ -376,7 +432,7 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
 
         {/* ═══════════ RIGHT SIDEBAR — AI Suggested Playlists ═══════════ */}
         <div style={{
-          width: 240, flexShrink: 0, overflow: 'hidden',
+          width: 280, flexShrink: 0, overflow: 'hidden',
           borderLeft: '1px solid var(--glass-border)',
           display: 'flex', flexDirection: 'column',
         }}>
@@ -384,6 +440,7 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
             onCreatePlaylist={handleCreatePlaylistFromSuggestion}
             playingTrackId={playingTrackId}
             onPlay={handlePlayTrack}
+            fetchTree={fetchTree}
           />
         </div>
       </div>

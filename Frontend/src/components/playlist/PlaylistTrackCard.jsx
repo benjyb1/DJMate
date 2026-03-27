@@ -1,5 +1,5 @@
 // playlist/PlaylistTrackCard.jsx — Card component for LLM suggestion tracks
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { m } from 'framer-motion';
 import { makeSupabaseCoverUrl } from '../../utils/coverUrl';
 
@@ -15,6 +15,24 @@ export default function PlaylistTrackCard({
   const artUrl = makeSupabaseCoverUrl(track.artist, track.title);
   const trackId = track.trackid || track.id;
 
+  // Track mousedown position to distinguish clicks from drags
+  const pointerStart = useRef(null);
+
+  const handlePointerDown = (e) => {
+    pointerStart.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handleClick = (e) => {
+    if (!pointerStart.current) return;
+    const dx = Math.abs(e.clientX - pointerStart.current.x);
+    const dy = Math.abs(e.clientY - pointerStart.current.y);
+    pointerStart.current = null;
+    // Only fire play if the pointer barely moved (not a drag)
+    if (dx < 6 && dy < 6) {
+      onPlay(track);
+    }
+  };
+
   return (
     <m.div
       initial={{ opacity: 0, y: 8 }}
@@ -25,13 +43,15 @@ export default function PlaylistTrackCard({
         e.dataTransfer.effectAllowed = 'copy';
       }}
       whileHover={{ scale: 1.01 }}
+      onPointerDown={handlePointerDown}
+      onClick={handleClick}
       style={{
         display: 'flex', alignItems: 'center', gap: 10,
         padding: '8px 12px',
         background: 'rgba(8,8,20,0.4)',
         border: '1px solid var(--glass-border)',
         borderRadius: 'var(--radius-sm)',
-        cursor: 'grab',
+        cursor: 'pointer',
         transition: 'border-color 100ms ease',
         ...style,
       }}

@@ -1,9 +1,9 @@
 // playlist/PlaylistSidebar.jsx — Left sidebar: LIBRARY tree + MY PLAYLISTS + Import/Export
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
-import { LazyMotion, domAnimation, m, AnimatePresence } from 'framer-motion';
+import { LazyMotion, domAnimation, m } from 'framer-motion';
 import { apiClient } from '../../api/apiClient';
 import GlassPanel from '../ui/GlassPanel';
-import { buildTree, buildFileTree } from './helpers';
+import { buildFileTree } from './helpers';
 import { useAuthStore } from '../../stores/authStore';
 import { isFileSystemAccessSupported, pickMusicFolder } from '../../utils/localAudio';
 
@@ -174,6 +174,70 @@ function FolderTreeNode({
   );
 }
 
+// ── PlaylistEntry (flat list item for MY PLAYLISTS, drop target) ─────────────
+function PlaylistEntry({ playlist, isSelected, onSelect, onDrop, onDelete }) {
+  const [dragOver, setDragOver] = useState(false);
+
+  const handleDragOver = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true); };
+  const handleDragLeave = (e) => { e.stopPropagation(); setDragOver(false); };
+  const handleDrop = (e) => { e.stopPropagation(); setDragOver(false); onDrop(playlist.id, e); };
+
+  return (
+    <div
+      onClick={() => onSelect(playlist.id)}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '6px 12px', margin: '0 4px', borderRadius: 4,
+        cursor: 'pointer',
+        background: dragOver
+          ? 'rgba(0,212,255,0.12)'
+          : isSelected
+            ? 'rgba(124,58,237,0.1)'
+            : 'transparent',
+        border: dragOver ? '1px solid rgba(0,212,255,0.4)' : '1px solid transparent',
+        transition: 'background 80ms ease, border-color 80ms ease',
+        minHeight: 26,
+      }}
+    >
+      <span style={{ color: isSelected ? '#a855f7' : '#64748b', display: 'flex' }}>
+        <FolderIcon open={false} />
+      </span>
+      <span style={{
+        flex: 1, minWidth: 0, fontSize: 12, fontWeight: isSelected ? 600 : 500,
+        color: isSelected ? '#e2e8f0' : '#94a3b8',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        fontFamily: 'var(--font-ui)',
+      }}>
+        {playlist.name}
+      </span>
+      {(playlist.track_count > 0 || playlist.track_count === 0) && (
+        <span style={{
+          fontSize: 9, color: '#475569', fontFamily: 'var(--font-mono)',
+          flexShrink: 0, marginLeft: 4,
+        }}>
+          {playlist.track_count ?? 0}
+        </span>
+      )}
+      {onDelete && (
+        <m.button
+          onClick={(e) => { e.stopPropagation(); onDelete(playlist.id); }}
+          whileHover={{ scale: 1.1 }}
+          style={{
+            background: 'none', border: 'none', color: '#475569', cursor: 'pointer',
+            padding: 0, display: 'flex', opacity: 0, transition: 'opacity 100ms ease',
+          }}
+          className="folder-delete-btn"
+        >
+          <svg width="10" height="10" viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+        </m.button>
+      )}
+    </div>
+  );
+}
+
 // ── LibraryTreeNode (read-only source tree from filepaths, drag FROM) ────────
 function LibraryTreeNode({ node, depth, selectedId, expandedIds, onToggleExpand, onSelect, tracksByPath }) {
   const isExpanded = expandedIds.has(node.id);
@@ -279,22 +343,13 @@ export default function PlaylistSidebar({
 }) {
   const profile = useAuthStore(s => s.profile);
 
-  // Playlist tree
-  const tree = useMemo(() => buildTree(allPlaylists), [allPlaylists]);
-
   // Library file tree
   const { roots: fileTreeRoots, tracksByPath } = useMemo(
     () => buildFileTree(poolTracks), [poolTracks]
   );
 
   // Expand/collapse state
-  const [expandedIds, setExpandedIds] = useState(new Set());
   const [libExpandedIds, setLibExpandedIds] = useState(new Set());
-  const [folderTracks, setFolderTracks] = useState({});
-
-  // New folder
-  const [showNewFolderInput, setShowNewFolderInput] = useState(false);
-  const [newFolderName, setNewFolderName] = useState('');
 
   // Ingest
   const [showIngest, setShowIngest] = useState(false);
@@ -304,24 +359,6 @@ export default function PlaylistSidebar({
   const ingestPollRef = useRef(null);
 
   const [loadError, setLoadError] = useState(null);
-
-  // ── Playlist tree toggle ──────────────────────────────────────────────
-  const handleToggleExpand = useCallback(async (folderId) => {
-    setExpandedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(folderId)) {
-        next.delete(folderId);
-      } else {
-        next.add(folderId);
-        if (!folderTracks[folderId]) {
-          apiClient.get(`/playlists/${folderId}`).then(data => {
-            setFolderTracks(p => ({ ...p, [folderId]: data.tracks || [] }));
-          }).catch(() => {});
-        }
-      }
-      return next;
-    });
-  }, [folderTracks]);
 
   // ── Library tree toggle/select ────────────────────────────────────────
   const handleLibToggleExpand = useCallback((nodeId) => {
@@ -339,7 +376,7 @@ export default function PlaylistSidebar({
     // No-op for now — library folders are source-only, not navigation targets
   }, []);
 
-  // ── Drop on playlist folder ───────────────────────────────────────────
+  // ── Drop on playlist entry ───────────────────────────────────────────
   const handleDropOnFolder = useCallback(async (folderId, e) => {
     e.preventDefault();
     try {
@@ -349,28 +386,11 @@ export default function PlaylistSidebar({
       const trackIds = Array.isArray(trackData) ? trackData.map(t => t.id) : [trackData.id];
 
       await apiClient.post(`/playlists/${folderId}/add-tracks`, { track_ids: trackIds });
-      const data = await apiClient.get(`/playlists/${folderId}`);
-      setFolderTracks(prev => ({ ...prev, [folderId]: data.tracks || [] }));
       if (fetchTree) await fetchTree();
     } catch (err) {
       console.error('Drop failed:', err);
     }
   }, [fetchTree]);
-
-  // ── Create folder ─────────────────────────────────────────────────────
-  const handleCreateFolder = useCallback(async () => {
-    if (!newFolderName.trim()) return;
-    try {
-      const result = await apiClient.post('/playlists/create', { name: newFolderName.trim() });
-      setNewFolderName('');
-      setShowNewFolderInput(false);
-      if (fetchTree) await fetchTree();
-      // Auto-select the new playlist
-      if (result?.id && onSelectPlaylist) onSelectPlaylist(result.id);
-    } catch (err) {
-      console.error('Failed to create folder:', err);
-    }
-  }, [newFolderName, fetchTree, onSelectPlaylist]);
 
   // ── Ingest ────────────────────────────────────────────────────────────
   const startIngest = useCallback(async (folder) => {
@@ -524,7 +544,7 @@ export default function PlaylistSidebar({
           MY PLAYLISTS
         </span>
         <m.button
-          onClick={() => setShowNewFolderInput(v => !v)}
+          onClick={onCreatePlaylist}
           whileHover={{ scale: 1.1 }}
           whileTap={{ scale: 0.9 }}
           style={{
@@ -541,70 +561,19 @@ export default function PlaylistSidebar({
         </m.button>
       </div>
 
-      {/* New folder input */}
-      <AnimatePresence>
-        {showNewFolderInput && (
-          <m.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            style={{ overflow: 'hidden', padding: '0 12px' }}
-          >
-            <div style={{ display: 'flex', gap: 4, paddingBottom: 8 }}>
-              <input
-                value={newFolderName}
-                onChange={e => setNewFolderName(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') handleCreateFolder();
-                  if (e.key === 'Escape') { setShowNewFolderInput(false); setNewFolderName(''); }
-                }}
-                placeholder="Playlist name..."
-                autoFocus
-                style={{
-                  flex: 1, background: 'rgba(255,255,255,0.06)',
-                  border: '1px solid var(--glass-border)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '5px 10px', color: '#e2e8f0',
-                  fontSize: 12, fontFamily: 'var(--font-ui)',
-                  outline: 'none',
-                }}
-              />
-              <m.button
-                onClick={handleCreateFolder}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                style={{
-                  background: '#00d4ff', color: '#0a0a14',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '5px 10px', fontSize: 11, fontWeight: 700,
-                  border: 'none', cursor: 'pointer',
-                  fontFamily: 'var(--font-ui)',
-                }}
-              >
-                Add
-              </m.button>
-            </div>
-          </m.div>
-        )}
-      </AnimatePresence>
-
-      {/* Playlist folder tree (scrollable) */}
+      {/* Playlist flat list (scrollable) */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
-        {tree.map(node => (
-          <FolderTreeNode
-            key={node.id}
-            node={node}
-            depth={0}
-            selectedId={activePlaylistId}
-            expandedIds={expandedIds}
-            onToggleExpand={handleToggleExpand}
+        {allPlaylists.map(pl => (
+          <PlaylistEntry
+            key={pl.id}
+            playlist={pl}
+            isSelected={activePlaylistId === pl.id}
             onSelect={onSelectPlaylist}
             onDrop={handleDropOnFolder}
-            folderTracks={folderTracks}
             onDelete={onDeletePlaylist}
           />
         ))}
-        {tree.length === 0 && (
+        {allPlaylists.length === 0 && (
           <div style={{
             padding: '12px 12px', textAlign: 'center',
             fontSize: 10, color: '#334155', fontFamily: 'var(--font-ui)', fontStyle: 'italic',

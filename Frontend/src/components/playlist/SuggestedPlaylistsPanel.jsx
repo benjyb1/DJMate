@@ -122,7 +122,7 @@ function PlaylistCard({ playlist, onSelect, isExpanded }) {
 }
 
 // ── Expanded Track List ──────────────────────────────────────────────────────
-function ExpandedPlaylist({ playlist, onBack, onCreatePlaylist, playingTrackId, onPlay }) {
+function ExpandedPlaylist({ playlist, onBack, onCreatePlaylist, playingTrackId, onPlay, fetchTree }) {
   return (
     <m.div
       initial={{ opacity: 0, x: 20 }}
@@ -163,7 +163,10 @@ function ExpandedPlaylist({ playlist, onBack, onCreatePlaylist, playingTrackId, 
         <m.button
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.97 }}
-          onClick={() => onCreatePlaylist(playlist.name, playlist.tracks.map(t => t.trackid))}
+          onClick={async () => {
+            await onCreatePlaylist(playlist.name, playlist.tracks.map(t => t.trackid));
+            if (fetchTree) fetchTree();
+          }}
           style={{
             padding: '6px 14px',
             background: 'linear-gradient(135deg, rgba(124,58,237,0.25), rgba(0,212,255,0.15))',
@@ -177,7 +180,7 @@ function ExpandedPlaylist({ playlist, onBack, onCreatePlaylist, playingTrackId, 
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
             <path d="M5 0v10M0 5h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
           </svg>
-          Save as Playlist
+          Save
         </m.button>
       </div>
 
@@ -261,9 +264,9 @@ function ExpandedTrackRow({ track, isPlaying, onPlay }) {
 }
 
 // ── Main Component ───────────────────────────────────────────────────────────
-const PAGE_SIZE = 3;
+const PAGE_SIZE = 5;
 
-export default function SuggestedPlaylistsPanel({ onCreatePlaylist, playingTrackId, onPlay }) {
+export default function SuggestedPlaylistsPanel({ onCreatePlaylist, playingTrackId, onPlay, fetchTree }) {
   const [playlists, setPlaylists] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -322,6 +325,7 @@ export default function SuggestedPlaylistsPanel({ onCreatePlaylist, playingTrack
             onCreatePlaylist={onCreatePlaylist}
             playingTrackId={playingTrackId}
             onPlay={onPlay}
+            fetchTree={fetchTree}
           />
         </AnimatePresence>
       </div>

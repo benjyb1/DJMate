@@ -130,6 +130,8 @@ export default function ActivePlaylistPanel({
   onRemoveTrack,   // (trackId) => void
   onCreatePlaylist,// () => void — opens new playlist flow
   onRenamePlaylist,// (id, newName) => void
+  onSavePlaylist,  // (name: string) => void — saves unsaved playlist
+  isUnsavedPlaylist, // boolean — true when workspace is unsaved
   searchFilter,
   onSearchChange,
 }) {
@@ -138,6 +140,7 @@ export default function ActivePlaylistPanel({
   const [lastSelectedIndex, setLastSelectedIndex] = useState(null);
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState('');
+  const [unsavedName, setUnsavedName] = useState('');
 
   // Filter tracks
   const filteredTracks = useMemo(() => {
@@ -187,7 +190,7 @@ export default function ActivePlaylistPanel({
   const handleDrop = useCallback((e) => {
     e.preventDefault();
     setDragOver(false);
-    if (!playlist || !onDropTracks) return;
+    if ((!playlist && !isUnsavedPlaylist) || !onDropTracks) return;
     try {
       const raw = e.dataTransfer.getData('application/json');
       if (!raw) return;
@@ -197,7 +200,7 @@ export default function ActivePlaylistPanel({
     } catch (err) {
       console.error('Drop failed:', err);
     }
-  }, [playlist, onDropTracks]);
+  }, [playlist, isUnsavedPlaylist, onDropTracks]);
 
   // Rename
   const startRename = () => {
@@ -213,7 +216,7 @@ export default function ActivePlaylistPanel({
   };
 
   // ── Empty state: no playlist selected ─────────────────────────────────
-  if (!playlist) {
+  if (!playlist && !isUnsavedPlaylist) {
     return (
       <div
         onDragOver={(e) => e.preventDefault()}
@@ -284,7 +287,24 @@ export default function ActivePlaylistPanel({
         </span>
 
         {/* Editable name */}
-        {editingName ? (
+        {isUnsavedPlaylist ? (
+          <input
+            value={unsavedName}
+            onChange={e => setUnsavedName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && unsavedName.trim() && onSavePlaylist) onSavePlaylist(unsavedName.trim()); }}
+            autoFocus
+            placeholder="Playlist name..."
+            style={{
+              fontSize: 14, fontWeight: 700, color: '#e2e8f0',
+              fontFamily: 'var(--font-ui)',
+              background: 'rgba(255,255,255,0.06)',
+              border: '1px solid rgba(124,58,237,0.4)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '2px 8px', outline: 'none',
+              flex: 1, minWidth: 0,
+            }}
+          />
+        ) : editingName ? (
           <input
             value={nameValue}
             onChange={e => setNameValue(e.target.value)}
@@ -320,10 +340,39 @@ export default function ActivePlaylistPanel({
           <span style={{
             fontSize: 10, color: '#00d4ff', fontFamily: 'var(--font-mono)',
             background: 'rgba(0,212,255,0.08)', borderRadius: 'var(--radius-pill)',
-            padding: '2px 8px', marginLeft: 'auto',
+            padding: '2px 8px', marginLeft: isUnsavedPlaylist ? 0 : 'auto',
           }}>
             {selectedTrackIds.size} selected
           </span>
+        )}
+
+        {isUnsavedPlaylist && (
+          <m.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.97 }}
+            disabled={!unsavedName.trim()}
+            onClick={() => onSavePlaylist && onSavePlaylist(unsavedName.trim())}
+            style={{
+              marginLeft: 'auto',
+              padding: '5px 14px',
+              background: unsavedName.trim() ? 'rgba(124,58,237,0.2)' : 'rgba(124,58,237,0.06)',
+              border: unsavedName.trim() ? '1px solid rgba(124,58,237,0.5)' : '1px solid rgba(124,58,237,0.15)',
+              borderRadius: 'var(--radius-pill)',
+              color: unsavedName.trim() ? '#a855f7' : '#475569',
+              fontSize: 12, fontWeight: 600,
+              cursor: unsavedName.trim() ? 'pointer' : 'not-allowed',
+              fontFamily: 'var(--font-ui)',
+              display: 'flex', alignItems: 'center', gap: 6,
+              flexShrink: 0,
+              transition: 'all 100ms ease',
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2 2h6l2 2v6c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V3c0-.6.4-1 1-1z" stroke="currentColor" strokeWidth="1.1"/>
+              <rect x="4" y="6" width="4" height="3" rx="0.5" stroke="currentColor" strokeWidth="0.8"/>
+            </svg>
+            Save Playlist
+          </m.button>
         )}
       </div>
 
@@ -377,10 +426,12 @@ export default function ActivePlaylistPanel({
         {(tracks || []).length === 0 && (
           <div style={{ textAlign: 'center', padding: 40, color: '#475569' }}>
             <p style={{ fontSize: 13, fontFamily: 'var(--font-ui)' }}>
-              This playlist is empty
+              {isUnsavedPlaylist ? 'No tracks yet' : 'This playlist is empty'}
             </p>
             <p style={{ fontSize: 11, fontFamily: 'var(--font-ui)', color: '#334155', marginTop: 4 }}>
-              Drag tracks here or ask the AI for suggestions
+              {isUnsavedPlaylist
+                ? 'Drag tracks here from the AI results or your library'
+                : 'Drag tracks here or ask the AI for suggestions'}
             </p>
           </div>
         )}

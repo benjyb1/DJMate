@@ -1,24 +1,18 @@
-// playlist/SuggestionsPanel.jsx — Bottom half: LLM suggestions (two modes)
-import React, { useState } from 'react';
+// playlist/SuggestionsPanel.jsx — Bottom half: LLM track suggestions
+import React from 'react';
 import { m, AnimatePresence } from 'framer-motion';
 import PlaylistTrackCard from './PlaylistTrackCard';
 
 export default function SuggestionsPanel({
-  suggestions,         // { mode: 'playlist'|'tracks', name?: string, tracks: [], message?: string } | null
+  suggestions,         // { tracks: [], message?: string } | null
   loading,             // boolean
   activePlaylistName,  // string | null
-  onCreatePlaylist,    // (name, trackIds[]) => void — create from suggestion group
   onAddTrack,          // (trackId) => void — add single track to active playlist
-  onAddAll,            // (trackIds[]) => void — add all suggestion tracks to active playlist
+  onAddAll,            // (trackIds[]) => void — move all suggestion tracks to active playlist
   playingTrackId,
   onPlay,
 }) {
-  const [editName, setEditName] = useState('');
-  const [nameEditing, setNameEditing] = useState(false);
-
   const hasSuggestions = suggestions?.tracks?.length > 0;
-  const isPlaylistMode = suggestions?.mode === 'playlist';
-  const displayName = nameEditing ? editName : (suggestions?.name || 'Suggested Playlist');
 
   // ── Loading state ─────────────────────────────────────────────────────
   if (loading) {
@@ -71,10 +65,10 @@ export default function SuggestionsPanel({
           <line x1="14" y1="24" x2="22" y2="24" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round"/>
         </svg>
         <p style={{ fontSize: 12, color: '#64748b', fontFamily: 'var(--font-ui)', textAlign: 'center', marginBottom: 4 }}>
-          Ask the AI to suggest tracks or create a playlist
+          Ask the AI to find tracks
         </p>
         <p style={{ fontSize: 10, color: '#334155', fontFamily: 'var(--font-ui)', textAlign: 'center' }}>
-          Use the chat bar below to get started
+          Use the chat bar below to search your library
         </p>
       </div>
     );
@@ -87,7 +81,7 @@ export default function SuggestionsPanel({
       overflow: 'hidden', minHeight: 160,
       borderTop: '1px solid var(--glass-border)',
     }}>
-      {/* Header (for playlist mode or general header) */}
+      {/* Header */}
       <div style={{
         padding: '10px 20px',
         display: 'flex', alignItems: 'center', gap: 10,
@@ -101,77 +95,14 @@ export default function SuggestionsPanel({
           </svg>
         </span>
 
-        {isPlaylistMode ? (
-          <>
-            {nameEditing ? (
-              <input
-                value={editName}
-                onChange={e => setEditName(e.target.value)}
-                onBlur={() => setNameEditing(false)}
-                onKeyDown={e => { if (e.key === 'Enter') setNameEditing(false); }}
-                autoFocus
-                style={{
-                  fontSize: 13, fontWeight: 700, color: '#e2e8f0',
-                  fontFamily: 'var(--font-ui)',
-                  background: 'rgba(255,255,255,0.06)',
-                  border: '1px solid rgba(0,212,255,0.3)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '2px 8px', outline: 'none',
-                }}
-              />
-            ) : (
-              <span
-                onClick={() => { setEditName(displayName); setNameEditing(true); }}
-                style={{
-                  fontSize: 13, fontWeight: 700, color: '#e2e8f0',
-                  fontFamily: 'var(--font-ui)', cursor: 'text',
-                }}
-              >
-                {displayName}
-              </span>
-            )}
-            <span style={{ fontSize: 10, color: '#475569', fontFamily: 'var(--font-mono)' }}>
-              {suggestions.tracks.length} tracks
-            </span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', fontFamily: 'var(--font-ui)' }}>
+          Suggestions
+        </span>
+        <span style={{ fontSize: 10, color: '#475569', fontFamily: 'var(--font-mono)' }}>
+          {suggestions.tracks.length} tracks
+        </span>
 
-            {/* Create Playlist button */}
-            <m.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.97 }}
-              onClick={() => {
-                const name = nameEditing ? editName : displayName;
-                const trackIds = suggestions.tracks.map(t => t.trackid || t.id);
-                onCreatePlaylist(name, trackIds);
-              }}
-              style={{
-                marginLeft: 'auto',
-                padding: '5px 14px',
-                background: 'linear-gradient(135deg, rgba(124,58,237,0.25), rgba(0,212,255,0.15))',
-                border: '1px solid rgba(124,58,237,0.4)',
-                borderRadius: 'var(--radius-pill)',
-                color: '#e2e8f0', fontSize: 11, fontWeight: 700,
-                cursor: 'pointer', fontFamily: 'var(--font-ui)',
-                display: 'flex', alignItems: 'center', gap: 6,
-              }}
-            >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <path d="M5 0v10M0 5h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
-              Create Playlist
-            </m.button>
-          </>
-        ) : (
-          <>
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', fontFamily: 'var(--font-ui)' }}>
-              Suggestions
-            </span>
-            <span style={{ fontSize: 10, color: '#475569', fontFamily: 'var(--font-mono)' }}>
-              {suggestions.tracks.length} tracks
-            </span>
-          </>
-        )}
-
-        {/* Add All button (if active playlist exists) */}
+        {/* Move All button (if active playlist exists) */}
         {activePlaylistName && onAddAll && (
           <m.button
             whileHover={{ scale: 1.02 }}
@@ -181,7 +112,7 @@ export default function SuggestionsPanel({
               onAddAll(trackIds);
             }}
             style={{
-              marginLeft: isPlaylistMode ? 0 : 'auto',
+              marginLeft: 'auto',
               padding: '5px 12px',
               background: 'rgba(0,212,255,0.08)',
               border: '1px solid rgba(0,212,255,0.25)',
@@ -190,7 +121,7 @@ export default function SuggestionsPanel({
               cursor: 'pointer', fontFamily: 'var(--font-ui)',
             }}
           >
-            Add All to {activePlaylistName}
+            Move All to {activePlaylistName}
           </m.button>
         )}
       </div>

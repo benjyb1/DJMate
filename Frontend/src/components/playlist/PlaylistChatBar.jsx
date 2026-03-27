@@ -3,9 +3,11 @@ import React from 'react';
 import { m } from 'framer-motion';
 
 const quickPrompts = [
-  'Create a tech house playlist',
-  'Suggest tracks for this playlist',
-  'Find peak energy tracks',
+  'Find deep house tracks',
+  'Dark minimal techno',
+  'Tracks around 128 BPM',
+  'High energy peak time',
+  'Melodic and atmospheric',
 ];
 
 export default function PlaylistChatBar({
@@ -55,7 +57,7 @@ export default function PlaylistChatBar({
           value={query}
           onChange={e => onQueryChange(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && query.trim() && !isThinking) onSubmit(query); }}
-          placeholder="e.g. Make me a deep house playlist..."
+          placeholder="e.g. Find deep house tracks..."
           disabled={isThinking}
           style={{
             flex: 1, padding: '9px 14px',
