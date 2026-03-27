@@ -380,7 +380,7 @@ function LibraryTreeNode({ node, depth, selectedId, expandedIds, onToggleExpand,
 // ── TrackRow (main area — compact list row, draggable) ──────────────────────
 function TrackRow({ track, isSelected, isPlaying, onSelect, onPlay, onDragStart }) {
   const [artError, setArtError] = useState(false);
-  const artUrl = makeSupabaseCoverUrl(track.artist, track.title);
+  const artUrl = track.album_art_url || makeSupabaseCoverUrl(track.trackid || track.id);
 
   return (
     <div

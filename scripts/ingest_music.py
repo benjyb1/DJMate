@@ -462,22 +462,21 @@ def _extract_album_art(filepath: Path) -> Optional[bytes]:
     return None
 
 
-def _upload_cover(supabase, filepath: Path, artist: str, title: str) -> Optional[str]:
-    """Extract cover art from file and upload to Supabase Storage.
+def _upload_cover(supabase, filepath: Path, trackid: int, artist: str = "", title: str = "") -> Optional[str]:
+    """Extract cover art from file and upload to Supabase Storage as {trackid}.jpg.
 
     Returns the public URL string, or None if there's no art / upload fails.
     """
     image_data = _extract_album_art(filepath)
     if not image_data:
         return None
-    filename   = _make_cover_filename(artist, title) + ".jpg"
+    filename = f"{trackid}.jpg"
     try:
         supabase.storage.from_(COVER_BUCKET).upload(
             filename,
             image_data,
             file_options={"content-type": "image/jpeg", "upsert": "true"},
         )
-        # Modern Supabase Python SDK returns the URL as a plain string
         url = supabase.storage.from_(COVER_BUCKET).get_public_url(filename)
         return url if isinstance(url, str) else url.get("publicUrl")
     except Exception as exc:
@@ -839,16 +838,7 @@ def main():
             stats["failed"] += 1
             continue
 
-        # Album cover
-        cover_url = None
-        if not args.skip_covers:
-            cover_url = _upload_cover(supabase, filepath, artist, title)
-            if cover_url:
-                log.info(f"  ✓ Cover uploaded")
-            else:
-                log.debug(f"  No cover art found in file")
-
-        # Upload track
+        # Upload track (cover uploaded after so we have the trackid)
         trackid = upload_track(
             supabase,
             title=title,
@@ -857,12 +847,22 @@ def main():
             bpm=bpm,
             key=key,
             embedding=emb_list,
-            album_art_url=cover_url,
+            album_art_url=None,
         )
         if trackid is not None:
             log.info(f"  ✓ Uploaded (trackid={trackid})")
             stats["uploaded"] += 1
             newly_added_ids.append(trackid)
+
+            # Album cover — named by trackid for consistency
+            if not args.skip_covers:
+                cover_url = _upload_cover(supabase, filepath, trackid, artist, title)
+                if cover_url:
+                    supabase.table("tracks").update({"album_art_url": cover_url}) \
+                        .eq("trackid", trackid).execute()
+                    log.info(f"  ✓ Cover uploaded as {trackid}.jpg")
+                else:
+                    log.debug(f"  No cover art found in file")
 
             # Upload audio file to Supabase Storage
             if not args.skip_audio_upload:

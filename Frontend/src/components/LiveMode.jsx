@@ -323,12 +323,12 @@ const IconSimilar = (props) => <IconSearch size={11} {...props} />;
 
 // ── Shared album art renderer ──────────────────────────────────────────────
 function TrackArt({ track, size = 44 }) {
-  const initial = track.albumArt || makeSupabaseCoverUrl(track.artist, track.name || track.title);
+  const initial = track.albumArt || makeSupabaseCoverUrl(track.trackid || track.id);
   const [artUrl, setArtUrl] = useState(initial);
   const [artErr, setArtErr] = useState(false);
 
   useEffect(() => {
-    const url = track.albumArt || makeSupabaseCoverUrl(track.artist, track.name || track.title);
+    const url = track.albumArt || makeSupabaseCoverUrl(track.trackid || track.id);
     setArtUrl(url);
     setArtErr(false);
   }, [track.id, track.trackid]);

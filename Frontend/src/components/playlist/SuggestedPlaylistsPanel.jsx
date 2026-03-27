@@ -44,7 +44,7 @@ function ArtMosaic({ tracks }) {
 
 function MosaicTile({ track }) {
   const [err, setErr] = useState(false);
-  const url = makeSupabaseCoverUrl(track.artist, track.title);
+  const url = track.album_art_url || makeSupabaseCoverUrl(track.trackid || track.id);
   if (err || !url) {
     return (
       <div style={{
@@ -201,7 +201,7 @@ function ExpandedPlaylist({ playlist, onBack, onCreatePlaylist, playingTrackId, 
 
 function ExpandedTrackRow({ track, isPlaying, onPlay }) {
   const [artErr, setArtErr] = useState(false);
-  const artUrl = makeSupabaseCoverUrl(track.artist, track.title);
+  const artUrl = track.album_art_url || makeSupabaseCoverUrl(track.trackid || track.id);
 
   return (
     <m.div

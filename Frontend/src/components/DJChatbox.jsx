@@ -55,17 +55,15 @@ function SimBar({ score }) {
 }
 
 // ── Album art: Supabase storage → iTunes → generative fallback ─────────────
-function AlbumArt({ title, artist, directUrl, size = 48 }) {
+function AlbumArt({ title, artist, directUrl, trackid, size = 48 }) {
   const [url, setUrl] = useState(directUrl || null);
   const [err, setErr] = useState(false);
 
   useEffect(() => {
     setErr(false);
     if (directUrl) { setUrl(directUrl); return; }
-    if (!title || !artist) return;
-    const supabaseUrl = makeSupabaseCoverUrl(artist, title);
-    if (supabaseUrl) { setUrl(supabaseUrl); return; }
-  }, [directUrl, title, artist]);
+    if (trackid) { setUrl(makeSupabaseCoverUrl(trackid)); return; }
+  }, [directUrl, trackid]);
 
   const handleImgError = () => {
     if (url && url.includes('supabase')) {
@@ -167,7 +165,7 @@ const TrackCard = React.memo(function TrackCard({ rank, track, score, source, on
         style={{ position: 'relative', flexShrink: 0, cursor: 'pointer', width: 46, height: 46 }}
         onClick={e => { e.stopPropagation(); onPlay?.(track); }}
       >
-        <AlbumArt title={track.title} artist={track.artist} directUrl={track.album_art_url || null} size={46} />
+        <AlbumArt title={track.title} artist={track.artist} trackid={track.trackid} directUrl={track.album_art_url || null} size={46} />
         <m.div
           style={{
             position: 'absolute', inset: 0,

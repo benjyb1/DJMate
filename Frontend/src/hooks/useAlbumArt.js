@@ -3,22 +3,20 @@ import { makeSupabaseCoverUrl } from '../utils/coverUrl';
 
 /**
  * Resolves album art URL with fallback chain:
- *   directUrl -> Supabase storage -> (on img error) iTunes search -> generative fallback (null).
- *
- * Used by shared AlbumArt component. Matches the logic from DJChatbox.AlbumArt
- * and LiveMode.TrackArt.
+ *   directUrl -> Supabase storage ({trackid}.jpg) -> iTunes search -> null.
  *
  * @param {string} artist
  * @param {string} title
  * @param {string|null} directUrl - Pre-existing URL (e.g. album_art_url from DB)
+ * @param {string|number|null} trackid - Used as fallback filename in storage
  * @returns {{ url: string|null, error: boolean, handleImgError: () => void }}
  */
-export function useAlbumArt(artist, title, directUrl) {
+export function useAlbumArt(artist, title, directUrl, trackid) {
   const initialUrl = useMemo(() => {
     if (directUrl) return directUrl;
-    if (!title && !artist) return null;
-    return makeSupabaseCoverUrl(artist, title) || null;
-  }, [directUrl, title, artist]);
+    if (trackid) return makeSupabaseCoverUrl(trackid);
+    return null;
+  }, [directUrl, trackid]);
 
   const [fallbackUrl, setFallbackUrl] = useState(null);
   const [error, setError] = useState(false);

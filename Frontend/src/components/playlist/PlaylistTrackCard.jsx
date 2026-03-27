@@ -12,8 +12,8 @@ export default function PlaylistTrackCard({
   style,
 }) {
   const [artError, setArtError] = useState(false);
-  const artUrl = makeSupabaseCoverUrl(track.artist, track.title);
   const trackId = track.trackid || track.id;
+  const artUrl = track.album_art_url || makeSupabaseCoverUrl(trackId);
 
   // Track mousedown position to distinguish clicks from drags
   const pointerStart = useRef(null);

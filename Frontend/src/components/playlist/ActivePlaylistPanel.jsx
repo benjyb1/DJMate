@@ -6,7 +6,7 @@ import { makeSupabaseCoverUrl } from '../../utils/coverUrl';
 // ── TrackRow (compact list row, draggable) ───────────────────────────────────
 function TrackRow({ track, isSelected, isPlaying, onSelect, onPlay, onDragStart, onRemove }) {
   const [artError, setArtError] = useState(false);
-  const artUrl = makeSupabaseCoverUrl(track.artist, track.title);
+  const artUrl = track.album_art_url || makeSupabaseCoverUrl(track.trackid || track.id);
 
   return (
     <div

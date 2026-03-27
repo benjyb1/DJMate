@@ -362,7 +362,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
             energy:   labels?.energy ?? null,
             semanticTags: parseTags(labels?.semantic_tags),
             vibe:     labels?.vibe ?? null,
-            albumArt: t.album_art_url || makeSupabaseCoverUrl(t.artist, t.title),
+            albumArt: t.album_art_url || makeSupabaseCoverUrl(t.trackid || t.id),
             audioUrl: t.audio_url || null,
             mfccFp:   features?.mfcc ?? null,
             x: t.x_coord || (Math.random() - 0.5) * 1000,
