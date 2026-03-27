@@ -346,7 +346,7 @@ function CandidateBar({ candidates, onSelect }) {
 }
 
 // ── Search results ─────────────────────────────────────────────────────────
-function SearchResults({ result, source, onTrackClick, onFindSimilar, onCandidateSelect, playingId, onPlay }) {
+function SearchResults({ result, source, onTrackClick, onFindSimilar, onCandidateSelect, playingId, onPlay, onEdit }) {
   if (!result) return null;
   const isSimilar = result.intent === 'find_similar_track';
 
@@ -442,7 +442,7 @@ function SearchResults({ result, source, onTrackClick, onFindSimilar, onCandidat
             source={isSimilar && i === 0 ? null : (isSimilar ? result.tracks[0] : source)}
             onClick={onTrackClick}
             onFindSimilar={onFindSimilar}
-            onEdit={setEditingTrack}
+            onEdit={onEdit}
             isPlaying={playingId === String(track.trackid)}
             onPlay={onPlay}
             index={i}
@@ -918,6 +918,7 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
                       onCandidateSelect={handleCandidateSelect}
                       playingId={playingId}
                       onPlay={handlePlay}
+                      onEdit={setEditingTrack}
                     />
                   </div>
 
