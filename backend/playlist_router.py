@@ -404,116 +404,54 @@ class SuggestTracksRequest(BaseModel):
 
 @router.post("/suggest-tracks")
 async def suggest_tracks(req: SuggestTracksRequest, db: DatabaseManager = Depends(get_tenant_db)):
-    """Preview mode: LLM interprets query and returns matching tracks WITHOUT persisting.
+    """Preview mode: same search pipeline as /chat but returns tracks for the playlist page.
 
-    Returns:
-        mode: "playlist" if LLM wants to create a playlist (includes name),
-              "tracks" if LLM is just suggesting tracks
-        name: playlist name (only if mode == "playlist")
-        tracks: list of matching track dicts
-        message: summary text
+    Uses SemanticInterpreter.interpret() → search() to find matching tracks.
+    Does NOT create playlists or modify the DB.
     """
     try:
-
-        # 1. Existing playlists for context
-        existing_playlists = await db.get_playlist_tree()
-
-        # 2. Track summary
-        track_pool = await db.get_track_pool()
-        total_tracks = len(track_pool)
-        sample_tags: set = set()
-        sample_vibes: set = set()
-        for t in track_pool[:200]:
-            for tag in (t.get("semantic_tags") or []):
-                sample_tags.add(tag)
-            for v in (t.get("vibe") or []):
-                sample_vibes.add(v)
-        track_summary = {
-            "total_tracks": total_tracks,
-            "sample_tags": list(sample_tags),
-            "sample_vibes": list(sample_vibes),
-        }
-
-        # 3. If suggesting for an existing playlist, include its context
-        if req.playlist_id:
-            playlist = await db.get_playlist(req.playlist_id)
-            if playlist and playlist.get("tracks"):
-                existing_track_names = [
-                    f"{t.get('artist', '?')} - {t.get('title', '?')}"
-                    for t in playlist["tracks"][:20]
-                ]
-                track_summary["current_playlist_tracks"] = existing_track_names
-
-        # 4. Interpret the command via LLM
         from backend.llm_interpreter import SemanticInterpreter
+
+        # 1. Interpret query using the same pipeline as Discovery chat
         interp = SemanticInterpreter(supabase_client=db.client)
         await interp.initialize()
-        actions = await interp.interpret_playlist_command(
-            req.query, existing_playlists, track_summary
-        )
+        params = await interp.interpret(req.query)
+        # More results for playlist building than Discovery (default 5)
+        params.setdefault("track_count", 15)
 
-        # 5. Process actions in PREVIEW mode (no DB writes)
-        mode = "tracks"
-        name = None
-        all_tracks = []
+        # 2. Search for matching tracks (pass db as db_manager for embedding fallback)
+        tracks_raw, _meta = await interp.search(params, db_manager=db)
 
-        for action in actions:
-            tool = action["tool"]
-            args = action.get("args", {})
-
-            if tool == "create_playlist":
-                mode = "playlist"
-                name = args.get("name", "Suggested Playlist")
-                criteria = args.get("criteria", {})
-                tracks = await _query_tracks_by_criteria(db, criteria)
-                all_tracks.extend(tracks)
-
-            elif tool == "organize_all":
-                mode = "playlist"
-                playlists_spec = args.get("playlists", [])
-                if playlists_spec:
-                    # Use the first playlist's name
-                    name = playlists_spec[0].get("name", "Suggested Playlist")
-                    for spec in playlists_spec:
-                        criteria = spec.get("criteria", {})
-                        tracks = await _query_tracks_by_criteria(db, criteria)
-                        all_tracks.extend(tracks)
-
-            elif tool in ("suggest_for_playlist", "add_to_playlist"):
-                criteria = args.get("criteria", {})
-                tracks = await _query_tracks_by_criteria(db, criteria)
-                all_tracks.extend(tracks)
-
-            elif tool == "move_tracks":
-                criteria = args.get("criteria", {})
-                if criteria:
-                    tracks = await _query_tracks_by_criteria(db, criteria)
-                    all_tracks.extend(tracks)
-
-        # Dedupe by trackid
+        # 3. Convert to dicts for JSON serialisation
+        tracks_out = []
         seen = set()
-        unique_tracks = []
-        for t in all_tracks:
-            tid = t.get("trackid") or t.get("id")
+        for t in tracks_raw:
+            td = t if isinstance(t, dict) else (vars(t) if hasattr(t, '__dict__') else {})
+            tid = td.get("trackid") or td.get("id")
             if tid and tid not in seen:
                 seen.add(tid)
-                unique_tracks.append(t)
+                tracks_out.append({
+                    "trackid": tid,
+                    "title": td.get("title", ""),
+                    "artist": td.get("artist", ""),
+                    "bpm": td.get("bpm"),
+                    "key": td.get("key"),
+                    "album_art_url": td.get("album_art_url"),
+                    "energy": td.get("energy"),
+                    "semantic_tags": td.get("semantic_tags", []),
+                    "vibe": td.get("vibe", []),
+                })
 
-        track_count = len(unique_tracks)
         return {
-            "mode": mode,
-            "name": name,
-            "tracks": unique_tracks,
-            "message": (
-                f'Created "{name}" with {track_count} tracks'
-                if mode == "playlist"
-                else f"Found {track_count} matching tracks"
-            ),
+            "mode": "tracks",
+            "name": None,
+            "tracks": tracks_out,
+            "message": f"Found {len(tracks_out)} matching tracks",
         }
 
     except Exception as e:
         logger.exception("Suggest tracks error")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{playlist_id}", response_model=PlaylistDetail)

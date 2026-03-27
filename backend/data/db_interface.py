@@ -394,10 +394,12 @@ class DatabaseManager:
             if not response.data:
                 return []
 
-            # Post-process filtering
+            # Post-process filtering (case-insensitive)
             results = []
-            tags = set(structured_query.get("semantic_tags", []) or structured_query.get("tags", []))
-            vibe_descriptors = set(structured_query.get("vibes", []) or structured_query.get("vibe_descriptors", []))
+            raw_tags = structured_query.get("semantic_tags", []) or structured_query.get("tags", [])
+            raw_vibes = structured_query.get("vibes", []) or structured_query.get("vibe_descriptors", [])
+            tags = {t.lower() for t in raw_tags}
+            vibe_descriptors = {v.lower() for v in raw_vibes}
 
             for track in response.data:
                 labels = track.get("track_labels", {})
@@ -407,15 +409,15 @@ class DatabaseManager:
                 if isinstance(labels, list):
                     labels = labels[0] if labels else {}
 
-                # Tag filtering (semantic_tags may be a JSON string, not a list)
+                # Tag filtering (case-insensitive)
                 if tags:
-                    track_tags = set(self._parse_json_field(labels.get("semantic_tags")))
+                    track_tags = {t.lower() for t in self._parse_json_field(labels.get("semantic_tags"))}
                     if not tags.intersection(track_tags):
                         continue
 
-                # Vibe filtering (vibe may be a JSON string, not a list)
+                # Vibe filtering (case-insensitive)
                 if vibe_descriptors:
-                    track_vibes = set(self._parse_json_field(labels.get("vibe")))
+                    track_vibes = {v.lower() for v in self._parse_json_field(labels.get("vibe"))}
                     if not vibe_descriptors.intersection(track_vibes):
                         continue
 

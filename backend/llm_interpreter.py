@@ -1594,8 +1594,46 @@ OUTPUT — valid JSON only:
         """
         Call the LLM with tool-calling enabled. The LLM decides which tools to
         invoke based on what the query actually needs — no required fields.
-        Falls back provider-by-provider on any failure.
+        Tries Anthropic (Claude) first, then falls back provider-by-provider.
         """
+        # ── Try Claude first (best at tool-calling) ──
+        if self._anthropic_client:
+            try:
+                anthropic_tools = []
+                for tool in _SEARCH_TOOLS:
+                    fn = tool["function"]
+                    anthropic_tools.append({
+                        "name": fn["name"],
+                        "description": fn["description"],
+                        "input_schema": fn["parameters"],
+                    })
+                response = await asyncio.wait_for(
+                    self._anthropic_client.messages.create(
+                        model=self._anthropic_model,
+                        max_tokens=1024,
+                        system=system_prompt,
+                        messages=[{"role": "user", "content": user_prompt}],
+                        tools=anthropic_tools,
+                    ),
+                    timeout=15,
+                )
+                # Convert Anthropic tool_use blocks to the same format as OpenAI
+                tool_calls_raw = [b for b in response.content if b.type == "tool_use"]
+                if tool_calls_raw:
+                    params = self._parse_tool_calls_anthropic(tool_calls_raw)
+                    params["model_used"] = f"Claude ({self._anthropic_model})"
+                    params["confidence"] = 0.9
+                    params["reasoning"] = (
+                        f"Tools called: {', '.join(b.name for b in tool_calls_raw)}"
+                    )
+                    logger.info(f"Claude search tool-calling succeeded: {[b.name for b in tool_calls_raw]}")
+                    return params
+                else:
+                    logger.warning("Claude returned no search tool calls, falling back")
+            except Exception as e:
+                logger.warning(f"Claude search tool-calling failed: {e}, falling back")
+
+        # ── Fallback: OpenAI-compatible providers ──
         attempts    = 0
         current_idx = self.active_provider_index
 
@@ -1743,6 +1781,21 @@ OUTPUT — valid JSON only:
             f"count: {params['track_count']}"
         )
         return params
+
+    def _parse_tool_calls_anthropic(self, tool_use_blocks) -> Dict[str, Any]:
+        """Convert Anthropic tool_use blocks to the same params dict as _parse_tool_calls."""
+        # Create thin wrappers that match the OpenAI tool_call interface
+        class _FnShim:
+            def __init__(self, name, arguments):
+                self.name = name
+                self.arguments = arguments
+
+        class _CallShim:
+            def __init__(self, block):
+                self.function = _FnShim(block.name, json.dumps(block.input))
+
+        shims = [_CallShim(b) for b in tool_use_blocks]
+        return self._parse_tool_calls(shims)
 
     # -------------------------------------------------------------------------
     # Prompts
