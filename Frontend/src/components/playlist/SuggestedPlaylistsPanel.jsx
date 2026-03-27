@@ -22,7 +22,7 @@ const SparklesIcon = () => (
 
 // ── Album Art Mosaic (2x2 grid of covers) ────────────────────────────────────
 function ArtMosaic({ tracks }) {
-  const coverTracks = tracks.slice(0, 4);
+  const coverTracks = (tracks || []).slice(0, 4);
   return (
     <div style={{
       width: 72, height: 72, borderRadius: 8, overflow: 'hidden',
@@ -44,7 +44,7 @@ function ArtMosaic({ tracks }) {
 
 function MosaicTile({ track }) {
   const [err, setErr] = useState(false);
-  const url = track.album_art_url || makeSupabaseCoverUrl(track.trackid || track.id);
+  const url = makeSupabaseCoverUrl(track.trackid || track.id) || null;
   if (err || !url) {
     return (
       <div style={{
@@ -114,7 +114,7 @@ function PlaylistCard({ playlist, onSelect, isExpanded }) {
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           marginTop: 2,
         }}>
-          {[...new Set(playlist.tracks.slice(0, 4).map(t => t.artist))].filter(Boolean).join(', ')}
+          {[...new Set((playlist.tracks || []).slice(0, 4).map(t => t.artist))].filter(Boolean).join(', ')}
         </div>
       </div>
     </m.div>
@@ -201,7 +201,7 @@ function ExpandedPlaylist({ playlist, onBack, onCreatePlaylist, playingTrackId, 
 
 function ExpandedTrackRow({ track, isPlaying, onPlay }) {
   const [artErr, setArtErr] = useState(false);
-  const artUrl = track.album_art_url || makeSupabaseCoverUrl(track.trackid || track.id);
+  const artUrl = makeSupabaseCoverUrl(track.trackid || track.id) || null;
 
   return (
     <m.div

@@ -61,8 +61,9 @@ function AlbumArt({ title, artist, directUrl, trackid, size = 48 }) {
 
   useEffect(() => {
     setErr(false);
-    if (directUrl) { setUrl(directUrl); return; }
     if (trackid) { setUrl(makeSupabaseCoverUrl(trackid)); return; }
+    if (directUrl) { setUrl(directUrl); return; }
+    setUrl(null);
   }, [directUrl, trackid]);
 
   const handleImgError = () => {

@@ -13,8 +13,8 @@ import { makeSupabaseCoverUrl } from '../utils/coverUrl';
  */
 export function useAlbumArt(artist, title, directUrl, trackid) {
   const initialUrl = useMemo(() => {
-    if (directUrl) return directUrl;
     if (trackid) return makeSupabaseCoverUrl(trackid);
+    if (directUrl) return directUrl;
     return null;
   }, [directUrl, trackid]);
 

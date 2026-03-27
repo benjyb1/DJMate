@@ -238,7 +238,7 @@ function FolderTreeNode({
       {/* Children (sub-folders + tracks) */}
       {isExpanded && (
         <div>
-          {node.children.map(child => (
+          {(node.children || []).map(child => (
             <FolderTreeNode
               key={child.id}
               node={child}
@@ -334,7 +334,7 @@ function LibraryTreeNode({ node, depth, selectedId, expandedIds, onToggleExpand,
 
       {isExpanded && (
         <div>
-          {node.children.map(child => (
+          {(node.children || []).map(child => (
             <LibraryTreeNode
               key={child.id}
               node={child}
@@ -380,7 +380,7 @@ function LibraryTreeNode({ node, depth, selectedId, expandedIds, onToggleExpand,
 // ── TrackRow (main area — compact list row, draggable) ──────────────────────
 function TrackRow({ track, isSelected, isPlaying, onSelect, onPlay, onDragStart }) {
   const [artError, setArtError] = useState(false);
-  const artUrl = track.album_art_url || makeSupabaseCoverUrl(track.trackid || track.id);
+  const artUrl = makeSupabaseCoverUrl(track.trackid || track.id) || null;
 
   return (
     <div
