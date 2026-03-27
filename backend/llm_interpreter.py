@@ -543,15 +543,9 @@ class SemanticInterpreter:
     # -------------------------------------------------------------------------
 
     def _init_providers(self):
-        # Anthropic (Claude) — used as primary for playlist tool-calling
-        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-        if anthropic_key and HAS_ANTHROPIC:
-            self._anthropic_client = anthropic.AsyncAnthropic(api_key=anthropic_key)
-            self._anthropic_model = "claude-sonnet-4-20250514"
-            logger.info("Anthropic (Claude Sonnet) configured as primary playlist provider")
-        else:
-            self._anthropic_client = None
-            self._anthropic_model = None
+        # Anthropic disabled — using Groq as primary provider
+        self._anthropic_client = None
+        self._anthropic_model = None
 
         if os.getenv("GROQ_API_KEY"):
             self.providers.append({
