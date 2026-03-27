@@ -118,7 +118,7 @@ def _get_llm_providers() -> list:
                     api_key=os.getenv("GEMINI_API_KEY"),
                     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
                 ),
-                "model": "gemini-2.0-flash",
+                "model": "gemini-2.5-flash",
             })
         if os.getenv("OPENAI_API_KEY"):
             providers.append({

@@ -331,36 +331,16 @@ export default function PlaylistOrganiser({ onIngestComplete }) {
     setSuggestionsLoading(true);
 
     try {
-      // Try suggest-tracks endpoint first (preview mode)
-      let data;
-      let usedSuggest = false;
-      try {
-        data = await apiClient.post('/playlists/suggest-tracks', {
-          query,
-          playlist_id: activePlaylistId || undefined,
-        });
-        usedSuggest = true;
-      } catch (suggestErr) {
-        // Endpoint not deployed yet — fall back to organize (executes immediately)
-        data = await apiClient.post('/playlists/organize', { query });
-      }
-
-      if (usedSuggest) {
-        // Set suggestions for bottom panel (preview mode)
-        setSuggestions({
-          mode: 'tracks',
-          name: data.name || null,
-          tracks: data.tracks || [],
-        });
-        setChatFeedback(data.message || `Found ${(data.tracks || []).length} tracks`);
-      } else {
-        // Organize executed directly — refresh sidebar
-        setChatFeedback(data.message || 'Done');
-        await fetchTree();
-        const newTree = await apiClient.get('/playlists/tree');
-        const newList = Array.isArray(newTree) ? newTree : newTree.playlists || [];
-        setAllPlaylists(newList);
-      }
+      const data = await apiClient.post('/playlists/suggest-tracks', {
+        query,
+        playlist_id: activePlaylistId || undefined,
+      });
+      setSuggestions({
+        mode: 'tracks',
+        name: data.name || null,
+        tracks: data.tracks || [],
+      });
+      setChatFeedback(data.message || `Found ${(data.tracks || []).length} tracks`);
     } catch (err) {
       setChatFeedback(`Error: ${err.message}`);
     } finally {
