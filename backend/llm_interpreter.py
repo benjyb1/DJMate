@@ -1015,7 +1015,7 @@ OUTPUT — valid JSON only:
         # Title search — exact substring match (highest confidence)
         try:
             resp = self.supabase.table("tracks") \
-                .select("trackid, title, artist, bpm, key") \
+                .select("trackid, title, artist, bpm, key, album_art_url") \
                 .ilike("title", f"%{query}%") \
                 .limit(limit) \
                 .execute()
@@ -1031,7 +1031,7 @@ OUTPUT — valid JSON only:
         if len(candidates) < limit:
             try:
                 resp = self.supabase.table("tracks") \
-                    .select("trackid, title, artist, bpm, key") \
+                    .select("trackid, title, artist, bpm, key, album_art_url") \
                     .ilike("artist", f"%{query}%") \
                     .limit(limit) \
                     .execute()
@@ -1048,7 +1048,7 @@ OUTPUT — valid JSON only:
             for word in words[:3]:
                 try:
                     resp = self.supabase.table("tracks") \
-                        .select("trackid, title, artist, bpm, key") \
+                        .select("trackid, title, artist, bpm, key, album_art_url") \
                         .ilike("title", f"%{word}%") \
                         .limit(limit) \
                         .execute()
@@ -1234,7 +1234,7 @@ OUTPUT — valid JSON only:
             ids = [r["trackid"] for r in label_rows if r.get("trackid")]
             tracks_resp = (
                 self.supabase.table("tracks")
-                .select("trackid, title, artist, bpm, key, filepath, embedding")
+                .select("trackid, title, artist, bpm, key, filepath, album_art_url, embedding")
                 .in_("trackid", ids)
                 .execute()
             )
@@ -1494,7 +1494,7 @@ OUTPUT — valid JSON only:
             # Fetch all tracks (bpm lives here)
             tracks_resp = (
                 self.supabase.table("tracks")
-                .select("trackid, title, artist, bpm, key, filepath, embedding")
+                .select("trackid, title, artist, bpm, key, filepath, album_art_url, embedding")
                 .limit(500)
                 .execute()
             )

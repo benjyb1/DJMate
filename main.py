@@ -136,7 +136,7 @@ async def get_all_tracks(
         # CRITICAL: Include x_coord, y_coord, z_coord from your database
         response = db.client.table("tracks") \
             .select("trackid, title, artist, album, bpm, key, filepath, "
-                    "x_coord, y_coord, z_coord, "
+                    "album_art_url, x_coord, y_coord, z_coord, "
                     "track_labels(semantic_tags, energy, vibe)") \
             .range(offset, offset + limit - 1) \
             .execute()
@@ -160,8 +160,9 @@ async def get_all_tracks(
                 "album":    track.get("album"),
                 "bpm":      track.get("bpm"),
                 "key":      track.get("key"),
-                "filepath": track.get("filepath"),
-                "energy":   labels.get("energy", 0.5),
+                "filepath":      track.get("filepath"),
+                "album_art_url": track.get("album_art_url"),
+                "energy":        labels.get("energy", 0.5),
                 "tags":     labels.get("semantic_tags", []),
                 "vibe":     labels.get("vibe", []),
             }
