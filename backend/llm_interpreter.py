@@ -590,6 +590,11 @@ class SemanticInterpreter:
             tags_resp  = self.supabase.table("track_labels").select("semantic_tags").execute()
             vibes_resp = self.supabase.table("track_labels").select("vibe").execute()
             if tags_resp.data:
+                if tags_resp.data[:2]:
+                    logger.info(f"DEBUG raw tag rows sample: {tags_resp.data[:2]}")
+                    for r in tags_resp.data[:2]:
+                        val = r.get("semantic_tags")
+                        logger.info(f"DEBUG row semantic_tags type={type(val).__name__}, value={val!r}")
                 for row in tags_resp.data:
                     if row.get("semantic_tags"):
                         tags.semantic_tags.update(row["semantic_tags"])
@@ -601,6 +606,7 @@ class SemanticInterpreter:
                     elif isinstance(v, str):
                         tags.vibes.add(v)
             logger.info(f"Loaded {len(tags.semantic_tags)} semantic tags, {len(tags.vibes)} vibes")
+            logger.info(f"Tags: {sorted(tags.semantic_tags)}")
         except Exception as e:
             logger.error(f"Error loading tags: {e}")
         self.available_tags = tags
@@ -1684,6 +1690,9 @@ OUTPUT — valid JSON only:
         tag_lower  = {t.lower(): t for t in self.available_tags.semantic_tags}
         vibe_lower = {v.lower(): v for v in self.available_tags.vibes}
 
+        logger.info(f"DEBUG tag_lower keys ({len(tag_lower)}): {sorted(tag_lower.keys())}")
+        logger.info(f"DEBUG available_tags.semantic_tags ({len(self.available_tags.semantic_tags)}): {sorted(self.available_tags.semantic_tags)}")
+
         params: Dict[str, Any] = {
             "tag_scores":    {},
             "vibe_scores":   {},
@@ -1704,7 +1713,9 @@ OUTPUT — valid JSON only:
                 for g in args.get("genres", []):
                     name = g.get("name", "")
                     conf = float(g.get("confidence", 0.5))
-                    canonical = tag_lower.get(name.lower())
+                    name_lower = name.lower()
+                    canonical = tag_lower.get(name_lower)
+                    logger.info(f"DEBUG set_genre: LLM sent name={name!r}, name.lower()={name_lower!r}, lookup result={canonical!r}, in tag_lower={name_lower in tag_lower}")
                     if canonical:
                         params["tag_scores"][canonical] = round(conf, 3)
                     else:
