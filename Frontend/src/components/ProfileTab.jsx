@@ -90,7 +90,7 @@ const dotStyle = (connected) => ({
 
 const hoverTap = { whileHover: { scale: 1.02 }, whileTap: { scale: 0.97 } };
 
-export default function ProfileTab() {
+export default function ProfileTab({ trackCount = 0 }) {
   const { profile, updateUsername, linkSupabase, signOut } = useAuthStore();
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState('');
@@ -139,7 +139,7 @@ export default function ProfileTab() {
   };
 
   const supabaseConnected = !!profile?.supabase_url;
-  const libraryImported = !!profile?.has_imported_library;
+  const libraryImported = trackCount > 0;
 
   const maskedUrl = profile?.supabase_url
     ? profile.supabase_url.replace(/^(https?:\/\/[^.]+)(.*)$/, (_, prefix) => prefix + '.***')
@@ -200,7 +200,7 @@ export default function ProfileTab() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           <div style={dotStyle(libraryImported)} />
           <span style={valueStyle}>
-            {libraryImported ? 'Library imported' : 'No library imported yet'}
+            {libraryImported ? `${trackCount} tracks synced` : 'No library imported yet'}
           </span>
         </div>
         <m.button style={secondaryBtnStyle} {...hoverTap} onClick={handleRescan} disabled={scanStatus === 'picking'}>

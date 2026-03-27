@@ -826,7 +826,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
               transition={{ duration: 0.25 }}
               style={{ position: 'absolute', inset: 0, overflowY: 'auto' }}
             >
-              <ProfileTab />
+              <ProfileTab trackCount={allNodes.length} />
             </m.div>
           )}
 
