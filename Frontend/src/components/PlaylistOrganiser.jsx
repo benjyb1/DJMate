@@ -4,6 +4,7 @@ import { LazyMotion, domAnimation, m, AnimatePresence } from 'framer-motion';
 import { apiClient } from '../api/apiClient';
 import GlassPanel from './ui/GlassPanel';
 import { makeSupabaseCoverUrl } from '../utils/coverUrl';
+import { resolveAudioSrc } from '../utils/resolveAudio';
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 function buildTree(flatList) {
@@ -862,12 +863,11 @@ export default function PlaylistOrganiser() {
       audioRef.current.pause();
       setPlayingTrackId(null);
     } else {
-      const audioUrl = track.filepath || track.audio_url || '';
-      if (audioUrl) {
-        audioRef.current.src = audioUrl;
-        audioRef.current.play().catch(() => {});
-        setPlayingTrackId(trackId);
-      }
+      setPlayingTrackId(trackId);
+      resolveAudioSrc(track).then(src => {
+        audioRef.current.src = src;
+        audioRef.current.play().catch(() => setPlayingTrackId(null));
+      });
     }
   }, [playingTrackId]);
 

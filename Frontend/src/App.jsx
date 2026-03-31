@@ -17,7 +17,8 @@ import { IconPlay, IconPause, IconSearch, IconWaveform } from './components/icon
 import { apiClient } from './api/apiClient';
 import { useAuthStore } from './stores/authStore';
 import { getCredentials, clearCredentials, syncFromProfile } from './stores/credentialStore';
-import { getLocalAudioUrl, isFileSystemAccessSupported, pickMusicFolder } from './utils/localAudio';
+import { isFileSystemAccessSupported, pickMusicFolder } from './utils/localAudio';
+import { resolveAudioSrc } from './utils/resolveAudio';
 
 // ── Parse semantic_tags (handles array, JSON string, or CSV) ──────────────
 function parseTags(raw) {
@@ -252,7 +253,6 @@ function AppMain({ reducedMotion, onReconfigure }) {
   const audioRef   = useRef(null);
   const texCache     = useRef({});
   const spriteMapRef = useRef({});
-  const prevBlobUrl  = useRef(null);
   const engineStoppedOnce = useRef(false);
 
   const [trackData,     setTrackData]     = useState({ nodes: [], links: [] });
@@ -346,7 +346,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
         if (!getSupabase()) throw new Error('Supabase not connected — link your project first');
         const { data, error: err } = await supabase
           .from('tracks')
-          .select('trackid,title,artist,bpm,key,album_art_url,audio_url,x_coord,y_coord,z_coord,track_labels(energy,semantic_tags,vibe),track_features(mfcc)');
+          .select('trackid,title,artist,bpm,key,filepath,album_art_url,x_coord,y_coord,z_coord,track_labels(energy,semantic_tags,vibe),track_features(mfcc)');
         if (err) throw err;
         if (!data?.length) throw new Error('No tracks found in database');
 
@@ -363,7 +363,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
             semanticTags: parseTags(labels?.semantic_tags),
             vibe:     labels?.vibe ?? null,
             albumArt: makeSupabaseCoverUrl(t.trackid) || null,
-            audioUrl: t.audio_url || null,
+            filepath: t.filepath || null,
             mfccFp:   features?.mfcc ?? null,
             x: t.x_coord || (Math.random() - 0.5) * 1000,
             y: t.y_coord || (Math.random() - 0.5) * 1000,
@@ -400,28 +400,6 @@ function AppMain({ reducedMotion, onReconfigure }) {
   }, [selectedTrack]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
-  // Helper: resolve audio source — try local File System Access first, fall back to backend
-  const resolveAudioSrc = useCallback(async (node) => {
-    // Revoke previous blob URL to prevent memory leaks
-    if (prevBlobUrl.current) {
-      URL.revokeObjectURL(prevBlobUrl.current);
-      prevBlobUrl.current = null;
-    }
-    // If the node already has a direct URL, use it
-    if (node.audioUrl) return node.audioUrl;
-    // Try local filesystem via File System Access API
-    if (node.filepath) {
-      const blobUrl = await getLocalAudioUrl(node.filepath);
-      if (blobUrl) {
-        prevBlobUrl.current = blobUrl;
-        return blobUrl;
-      }
-    }
-    // Fallback: backend audio endpoint (works in local dev)
-    const base = import.meta.env.VITE_API_URL
-      || (import.meta.env.DEV ? 'http://localhost:8000' : 'https://djmate.onrender.com');
-    return `${base}/tracks/${node.id}/audio`;
-  }, []);
 
   const handleNodeClick = useCallback((node) => {
     if (!fgRef.current) return;
@@ -441,7 +419,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
     setSelectedTrack(node);
     const pos = new THREE.Vector3(node.x, node.y, node.z);
     fgRef.current.cameraPosition(pos.clone().add(new THREE.Vector3(0, 20, 80)), pos, 1500);
-  }, [selectedTrack, isPlaying, resolveAudioSrc]);
+  }, [selectedTrack, isPlaying]);
 
   const handleChatTrackSelect = useCallback((trackid) => {
     const node = allNodes.find(n => String(n.id) === String(trackid));
@@ -458,7 +436,7 @@ function AppMain({ reducedMotion, onReconfigure }) {
         setIsPlaying(true);
       });
     }
-  }, [isPlaying, selectedTrack, resolveAudioSrc]);
+  }, [isPlaying, selectedTrack]);
 
   const handleFindSimilar = useCallback((trackid, trackName) => {
     chatboxRef.current?.openAndFindSimilar(trackid, trackName);

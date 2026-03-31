@@ -18,13 +18,11 @@ Usage:
 import os
 import json
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 import numpy as np
 import librosa
-import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 from shared_utils import get_supabase
@@ -53,19 +51,6 @@ def save_progress(prog):
     with open(PROGRESS_FILE, "w") as f:
         json.dump(prog, f, indent=2)
 
-
-def download_audio(url: str, dest: str) -> bool:
-    """Stream-download an audio file.  Returns True on success."""
-    try:
-        with requests.get(url, timeout=90, stream=True) as r:
-            r.raise_for_status()
-            with open(dest, "wb") as f:
-                for chunk in r.iter_content(1 << 17):   # 128 KB chunks
-                    f.write(chunk)
-        return True
-    except Exception as exc:
-        print(f"    ✗ download failed: {exc}")
-        return False
 
 
 def compute_mfcc_fingerprint(path: str) -> list[float] | None:
@@ -120,9 +105,9 @@ def main():
     done_ids   = set(map(str, prog["done"]))
     failed_ids = set(map(str, prog["failed"]))
 
-    # Fetch all tracks that have an audio URL
-    rows = sb.table("tracks").select("trackid, title, artist, audio_url").execute().data
-    tracks_with_audio = [t for t in rows if t.get("audio_url")]
+    # Fetch all tracks that have a local filepath
+    rows = sb.table("tracks").select("trackid, title, artist, filepath").execute().data
+    tracks_with_audio = [t for t in rows if t.get("filepath")]
     remaining = [t for t in tracks_with_audio
                  if str(t["trackid"]) not in done_ids]
 
@@ -138,21 +123,18 @@ def main():
         tid    = str(track["trackid"])
         title  = track.get("title",  "?")
         artist = track.get("artist", "?")
-        url    = track["audio_url"]
+        local_path = track["filepath"]
 
-        suffix = Path(url).suffix or ".mp3"
         print(f"[{idx+1}/{len(remaining)}] {artist} — {title}")
 
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp_path = tmp.name
+        if not Path(local_path).is_file():
+            print(f"    ✗ file not found: {local_path}")
+            failed_ids.add(tid)
+            newly_failed += 1
+            continue
 
         try:
-            if not download_audio(url, tmp_path):
-                failed_ids.add(tid)
-                newly_failed += 1
-                continue
-
-            fp = compute_mfcc_fingerprint(tmp_path)
+            fp = compute_mfcc_fingerprint(local_path)
             if fp is None:
                 failed_ids.add(tid)
                 newly_failed += 1
@@ -172,11 +154,11 @@ def main():
             print(f"    ✓  [{newly_done} done | "
                   f"ETA {int(eta_s//60)}m{int(eta_s%60):02d}s]")
 
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        except Exception as exc:
+            print(f"    ✗ error: {exc}")
+            failed_ids.add(tid)
+            newly_failed += 1
+            continue
 
         # Save progress every 20 tracks
         if (idx + 1) % 20 == 0:

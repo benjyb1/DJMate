@@ -5,6 +5,7 @@ import { apiClient } from '../api/apiClient';
 import GlassPanel from './ui/GlassPanel';
 import TagEditor from './TagEditor';
 import { makeSupabaseCoverUrl } from '../utils/coverUrl';
+import { resolveAudioSrc } from '../utils/resolveAudio';
 import { IconPlay, IconPause, IconSearch, IconClose, IconSend, IconUp, IconDown, IconEdit } from './icons';
 
 const API_BASE = import.meta.env.VITE_API_URL
@@ -547,17 +548,18 @@ const DJChatbox = forwardRef(function DJChatbox({ selectedTrack, trackCount, onT
   }, []);
 
   const handlePlay = useCallback((track) => {
-    const id  = String(track.trackid);
-    const src = track.audio_url || `${API_BASE}/tracks/${track.trackid}/audio`;
-    const a   = chatAudioRef.current;
+    const id = String(track.trackid);
+    const a  = chatAudioRef.current;
     if (playingId === id) {
       a.pause();
       setPlayingId(null);
     } else {
       a.pause();
-      a.src = src;
-      a.play().catch(() => {});
       setPlayingId(id);
+      resolveAudioSrc(track).then(src => {
+        a.src = src;
+        a.play().catch(() => setPlayingId(null));
+      });
     }
   }, [playingId]);
 

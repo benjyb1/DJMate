@@ -9,16 +9,13 @@ import Toast from './ui/Toast';
 import { makeSupabaseCoverUrl } from '../utils/coverUrl';
 import { useAuthStore } from '../stores/authStore';
 import { isFileSystemAccessSupported, pickMusicFolder } from '../utils/localAudio';
+import { resolveAudioSrc, resolveAudioSrcSync } from '../utils/resolveAudio';
 import { IconMic, IconPlus, IconClose, IconSend, IconVector, IconPlay, IconPause, IconSearch, IconEdit } from './icons';
 
 const API_BASE = import.meta.env.VITE_API_URL
   || (import.meta.env.DEV ? 'http://localhost:8000' : 'https://djmate.onrender.com');
 
 // ── Shared helpers ─────────────────────────────────────────────────────────
-function getAudioSrc(track) {
-  return track.audioUrl || track.audio_url
-    || `${API_BASE}/tracks/${track.id || track.trackid}/audio`;
-}
 
 // ── 7D Trajectory calculation ──────────────────────────────────────────────
 function normBpm(bpm) { return Math.max(0, Math.min(1, ((bpm || 130) - 60) / 140)); }
@@ -774,9 +771,11 @@ export default function LiveMode({ setList, setSetList, allNodes }) {
       setPlayingId(null);
     } else {
       a.pause();
-      a.src = getAudioSrc(track);
-      a.play().catch(() => {});
       setPlayingId(id);
+      resolveAudioSrc(track).then(src => {
+        a.src = src;
+        a.play().catch(() => setPlayingId(null));
+      });
     }
   }, [playingId]);
 
