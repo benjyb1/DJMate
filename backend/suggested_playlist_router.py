@@ -86,7 +86,7 @@ async def _load_track_metadata(db: DatabaseManager, track_ids: List[int]) -> Dic
         return {}
 
     resp = db.client.table("tracks").select(
-        "trackid, title, artist, bpm, key, album_art_url, audio_url"
+        "trackid, title, artist, bpm, key, filepath, album_art_url"
     ).in_("trackid", track_ids).execute()
 
     meta = {}

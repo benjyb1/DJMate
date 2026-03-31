@@ -15,7 +15,7 @@ _tenant_cache: dict[str, tuple[DatabaseManager, float]] = {}
 _CACHE_TTL = 600   # 10 minutes
 _MAX_TENANTS = 100  # cap to prevent memory exhaustion
 
-# The central DJMate Supabase — must never be used as a tenant project.
+# The central DJMate Supabase host.
 _CENTRAL_HOST = urlparse(
     os.getenv("CENTRAL_SUPABASE_URL", "https://cvermotfxamubejfnoje.supabase.co")
 ).hostname
@@ -41,19 +41,17 @@ def get_tenant_db(request: Request) -> DatabaseManager:
     FastAPI dependency: extract Supabase creds from request headers,
     return a cached DatabaseManager for that tenant.
 
-    Rejects requests with no tenant headers — the central DB should
-    never be used for per-user data operations.
+    Falls back to the default (central) DB when no tenant headers are
+    present or when the headers point at the central project itself.
     """
     sb_url = request.headers.get("x-supabase-url")
     sb_key = request.headers.get("x-supabase-key")
 
+    # No tenant headers — use the default connection
     if not sb_url or not sb_key:
-        raise HTTPException(
-            status_code=401,
-            detail="No Supabase project linked. Open DJMate settings and connect your Supabase project.",
-        )
+        from backend.dependencies import get_db
+        return get_db()
 
-    # ── Validate the URL ────────────────────────────────────────────────
     try:
         parsed = urlparse(sb_url)
     except Exception:
@@ -61,16 +59,16 @@ def get_tenant_db(request: Request) -> DatabaseManager:
 
     host = (parsed.hostname or "").lower()
 
+    # Central DB URL sent as tenant — just fall back to default connection
+    if host == _CENTRAL_HOST:
+        from backend.dependencies import get_db
+        return get_db()
+
+    # SSRF protection: only allow *.supabase.co URLs
     if not _ALLOWED_HOST_RE.match(host):
         raise HTTPException(
             status_code=400,
             detail="Supabase URL must be a *.supabase.co project URL.",
-        )
-
-    if host == _CENTRAL_HOST:
-        raise HTTPException(
-            status_code=403,
-            detail="Cannot use the central DJMate database as a tenant project.",
         )
 
     # ── Cache lookup (keyed on url + key) ───────────────────────────────
