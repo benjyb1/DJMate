@@ -53,13 +53,18 @@ async def start_ingest(req: IngestRequest, request: Request):
     if req.skip_fingerprints:
         cmd.append("--skip-fingerprints")
 
-    # Extract tenant credentials from headers and pass to subprocess
+    # Extract tenant credentials from headers and pass to subprocess.
+    # Both are required — ingesting to the central DB is not allowed.
     sb_url = request.headers.get("x-supabase-url", "")
     sb_key = request.headers.get("x-supabase-key", "")
+    if not sb_url or not sb_key:
+        raise HTTPException(
+            status_code=401,
+            detail="No Supabase project linked. Connect your Supabase project before ingesting.",
+        )
     env = os.environ.copy()
-    if sb_url and sb_key:
-        env["SUPABASE_URL"] = sb_url
-        env["SUPABASE_KEY"] = sb_key
+    env["SUPABASE_URL"] = sb_url
+    env["SUPABASE_KEY"] = sb_key
 
     # Reset state
     _ingest_state["status"] = "running"

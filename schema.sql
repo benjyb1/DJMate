@@ -102,6 +102,16 @@ create table if not exists crate_tracks (
   position  integer not null default 0
 );
 
+-- ── Suggested playlists (AI-generated) ──────────────────────────────────
+
+create table if not exists suggested_playlists (
+  id              bigint generated always as identity primary key,
+  name            text not null,
+  seed_trackid    text references tracks(trackid) on delete set null,
+  track_ids       jsonb default '[]'::jsonb,
+  generated_at    timestamptz default now()
+);
+
 -- ── Tag operations tables ────────────────────────────────────────────────
 
 -- tag_operations_log: audit log for batch tagging operations
@@ -171,6 +181,7 @@ returns table (
   similarity float
 )
 language plpgsql
+set search_path = public, extensions
 as $$
 begin
   return query
@@ -205,6 +216,7 @@ alter table crates             enable row level security;
 alter table crate_tracks       enable row level security;
 alter table tag_operations_log enable row level security;
 alter table tag_track_feedback enable row level security;
+alter table suggested_playlists enable row level security;
 
 -- Allow anon (and authenticated) full read/write on all tables
 create policy "anon full access" on tracks             for all using (true) with check (true);
@@ -218,6 +230,24 @@ create policy "anon full access" on crates             for all using (true) with
 create policy "anon full access" on crate_tracks       for all using (true) with check (true);
 create policy "anon full access" on tag_operations_log for all using (true) with check (true);
 create policy "anon full access" on tag_track_feedback for all using (true) with check (true);
+create policy "anon full access" on suggested_playlists for all using (true) with check (true);
+
+-- ── Schema version tracking ─────────────────────────────────────────────────
+-- Used by the frontend to detect outdated schemas and prompt for migrations.
+
+create table if not exists schema_version (
+  version     integer primary key,
+  applied_at  timestamptz default now()
+);
+
+-- Seed with version 1 if empty (first install).
+-- Future migrations bump this with: INSERT INTO schema_version (version) VALUES (2);
+insert into schema_version (version)
+select 1
+where not exists (select 1 from schema_version where version = 1);
+
+alter table schema_version enable row level security;
+create policy "anon full access" on schema_version for all using (true) with check (true);
 
 -- ── Storage (manual step) ───────────────────────────────────────────────────
 -- Supabase Storage buckets cannot be created via SQL. After running this

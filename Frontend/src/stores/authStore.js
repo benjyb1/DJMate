@@ -1,6 +1,7 @@
 // Frontend/src/stores/authStore.js
 import { create } from 'zustand';
 import { centralSupabase, CENTRAL_URL, CENTRAL_KEY } from '../utils/centralSupabase';
+import { syncFromProfile, getCredentials } from './credentialStore';
 
 export const useAuthStore = create((set, get) => ({
   session: null,
@@ -11,6 +12,17 @@ export const useAuthStore = create((set, get) => ({
     const { data: { session } } = await centralSupabase.auth.getSession();
     if (session) {
       const profile = await get().fetchProfile(session.user.id);
+      // Sync BYOS credentials from the central DB profile into localStorage
+      // so the user's linked project is available on any device.
+      if (profile) {
+        const synced = syncFromProfile(profile);
+        if (!synced && getCredentials()) {
+          // localStorage has creds but the profile doesn't — push them up
+          // so the central DB stays in sync (e.g. user linked before this change).
+          const local = getCredentials();
+          get().linkSupabase(local.url, local.key).catch(() => {});
+        }
+      }
       set({ session, profile, loading: false });
     } else {
       set({ loading: false });
@@ -19,6 +31,7 @@ export const useAuthStore = create((set, get) => ({
     centralSupabase.auth.onAuthStateChange(async (_event, session) => {
       if (session) {
         const profile = await get().fetchProfile(session.user.id);
+        if (profile) syncFromProfile(profile);
         set({ session, profile });
       } else {
         set({ session: null, profile: null });

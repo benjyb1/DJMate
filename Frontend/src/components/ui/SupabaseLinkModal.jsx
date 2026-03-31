@@ -5,6 +5,9 @@ import { createClient } from '@supabase/supabase-js';
 const API_BASE = import.meta.env.VITE_API_URL
   || (import.meta.env.DEV ? 'http://localhost:8000' : 'https://djmate.onrender.com');
 
+/** The schema version that this build of DJMate expects. */
+const CURRENT_SCHEMA_VERSION = 1;
+
 async function testConnection(url, key) {
   // Disable session persistence so this throwaway client doesn't
   // overwrite the central Supabase client's auth in localStorage
@@ -15,11 +18,27 @@ async function testConnection(url, key) {
   if (error) {
     // Table doesn't exist — user needs to set up schema
     if (error.message?.includes('does not exist') || error.code === '42P01' || error.code === 'PGRST204') {
-      return { connected: true, needsSchema: true };
+      return { connected: true, needsSchema: true, schemaVersion: null };
     }
     throw new Error(error.message);
   }
-  return { connected: true, needsSchema: false };
+
+  // Tables exist — check schema version
+  let schemaVersion = null;
+  const { data: versionRow } = await client
+    .from('schema_version')
+    .select('version')
+    .order('version', { ascending: false })
+    .limit(1)
+    .single();
+  if (versionRow) schemaVersion = versionRow.version;
+
+  return {
+    connected: true,
+    needsSchema: false,
+    schemaVersion,
+    outdated: schemaVersion !== null && schemaVersion < CURRENT_SCHEMA_VERSION,
+  };
 }
 
 /** Extract the Supabase project ref from a project URL like https://xyzcompany.supabase.co */
@@ -47,6 +66,8 @@ export default function SupabaseLinkModal({
   const [needsSchema, setNeedsSchema] = useState(false);
   const [schemaSQL, setSchemaSQL] = useState('');
   const [copied, setCopied] = useState(false);
+  const [schemaOutdated, setSchemaOutdated] = useState(false);
+  const [detectedVersion, setDetectedVersion] = useState(null);
 
   useEffect(() => {
     if (open) {
@@ -57,6 +78,8 @@ export default function SupabaseLinkModal({
       setNeedsSchema(false);
       setSchemaSQL('');
       setCopied(false);
+      setSchemaOutdated(false);
+      setDetectedVersion(null);
     }
   }, [open, defaultUrl, defaultKey]);
 
@@ -84,6 +107,11 @@ export default function SupabaseLinkModal({
           setSchemaSQL('-- Could not fetch schema SQL. Check the DJMate docs for setup instructions.');
         }
         return; // Don't link yet — user needs to run SQL first
+      }
+      // Warn if schema is outdated (but still allow linking)
+      if (result.outdated) {
+        setSchemaOutdated(true);
+        setDetectedVersion(result.schemaVersion);
       }
       // Connection good and tables exist
       setSuccess(true);
@@ -462,10 +490,29 @@ export default function SupabaseLinkModal({
                       fontSize: 12,
                       color: '#34d399',
                       fontFamily: "'Inter', system-ui, sans-serif",
-                      marginBottom: 14,
+                      marginBottom: schemaOutdated ? 8 : 14,
                     }}
                   >
                     Connected successfully.
+                  </div>
+                )}
+                {schemaOutdated && (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: '#fbbf24',
+                      fontFamily: "'Inter', system-ui, sans-serif",
+                      marginBottom: 14,
+                      lineHeight: 1.5,
+                      padding: '8px 10px',
+                      background: 'rgba(251,191,36,0.08)',
+                      border: '1px solid rgba(251,191,36,0.2)',
+                      borderRadius: 8,
+                    }}
+                  >
+                    Your schema is version {detectedVersion} but DJMate expects
+                    version {CURRENT_SCHEMA_VERSION}. Some features may not work
+                    until you run the latest migration SQL in your Supabase SQL Editor.
                   </div>
                 )}
 

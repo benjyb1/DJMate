@@ -41,12 +41,15 @@ async def lifespan(app):
     # module-import time.  This lets Render's port scanner detect :10000
     # immediately instead of waiting for Supabase + Redis round-trips.
     logger.info("DJMate API starting up...")
+
+    # Note: In BYOS mode, there is no shared database to probe at startup.
+    # Per-tenant clients are created on demand via tenant.py.
+    # We still initialise the shared DatabaseManager for any server-level
+    # resources (Redis cache, etc.) but skip the table probe since the
+    # central DB no longer holds per-user tables.
     db_manager = get_db()
-    try:
-        test = db_manager.client.table("tracks").select("trackid").limit(1).execute()
-        logger.info("Database connection OK")
-    except Exception as e:
-        logger.error(f"Database startup check failed: {e}")
+    if db_manager.client:
+        logger.info("Shared DatabaseManager initialised (Redis/pool only)")
     yield
     logger.info("DJMate API shutting down...")
     if hasattr(db_manager, 'pg_pool') and db_manager.pg_pool:
