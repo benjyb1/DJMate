@@ -15,3 +15,19 @@ venv/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Claude Code worktrees / local agent artefacts
+.claude/worktrees/
+Frontend/.claude/
+
+# Local ML data, caches and library exports (regenerated locally, not shipped)
+# Note: scripts/energy_model.json (the fitted model) IS tracked.
+scripts/*_energy.json
+scripts/*_plan.json
+scripts/energy_cache*.json
+scripts/arousal_cache.json
+scripts/all_tracks.json
+scripts/bpm_map.json
+scripts/energy_by_path.json
+scripts/calib_set.json
+scripts/mixing_*.json
