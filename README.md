@@ -118,7 +118,7 @@ Track positions come from a UMAP projection of the 1280-dim embeddings down to t
 └───────────────────────────────────────────────────────────────┘
 ```
 
-The split matters: heavy model inference runs offline in batch and writes its results to the database, so the API stays light enough for a Render free-tier dyno and every request is a fast vector lookup rather than a model forward pass.
+The split matters: heavy model inference runs offline in batch and writes its results to the database, so the API stays light enough for a Render free-tier instance and every request is a fast vector lookup rather than a model forward pass.
 
 ---
 
