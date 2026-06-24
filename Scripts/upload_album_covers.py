@@ -126,8 +126,8 @@ def process_all_tracks():
             no_art += 1
             continue
 
-        filename = create_safe_filename(artist, title)
-        url = upload_album_art(image_data, filename)
+        # Use trackid as filename — no more naming mismatches
+        url = upload_album_art(image_data, trackid)
 
         if url:
             try:
