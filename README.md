@@ -36,11 +36,11 @@ The tagging backend, where the online learning loop suggests labels and learns f
 
 ## The machine learning, in one screen
 
-Everything here runs off a single signal: a 1280-dimension audio embedding per track. The interesting parts are what gets layered on top of it.
+Everything here runs off a single signal: a 1536-dimension audio embedding per track (768-dim Discogs-EffNet activations, mean- and std-pooled across frames). The interesting parts are what gets layered on top of it.
 
 | Component | Technique | What it does |
 |---|---|---|
-| **Embeddings** | Discogs-EffNet (Essentia + TensorFlow) | One 1280-dim vector per track, computed from the raw audio. Stored in Postgres with pgvector. |
+| **Embeddings** | Discogs-EffNet (Essentia + TensorFlow) | One 1536-dim vector per track (mean + std pooling), computed from the raw audio. Stored in Postgres with pgvector. |
 | **Similarity search** | Cosine distance (pgvector + scikit-learn) | "Find tracks like this", nearest-neighbour retrieval, the foundation everything else builds on. |
 | **Library understanding** | Pretrained transfer-learning heads | Mood (party, aggressive, relaxed) and danceability on EffNet, plus a DEAM valence/arousal regressor on MusiCNN embeddings. |
 | **Energy model** | 5-fold cross-validated regression | Fits audio features to my own 1 to 10 energy ratings, compares feature sets by MAE, keeps only what actually predicts my ear. |
@@ -49,9 +49,11 @@ Everything here runs off a single signal: a 1280-dimension audio embedding per t
 | **Set building** | Clustering + harmonic rules | Seed-and-expand clustering for playlist suggestions; Camelot-wheel key matching and energy curves for sequencing a crate. |
 | **Query layer** | LLM tool-calling | Turns a natural-language query into genre, vibe, energy, BPM and count, then routes it to the right search. |
 
+The energy model is the one component with a proper held-out evaluation (5-fold CV against manual ratings, below). Auto-tagging, playlist coherence and search relevance are judged by ear rather than a held-out metric — worth knowing before assuming precision/recall numbers exist for them.
+
 ### Audio embeddings
 
-Each track is run through the Discogs-EffNet model (Essentia on TensorFlow) at 16 kHz mono, producing a 1280-dimension embedding that captures timbre and texture far better than BPM and key alone. Vectors are L2-normalised and stored in a `pgvector` column, so similarity is just cosine distance. The live API retrieves neighbours through a Postgres `match_tracks` RPC; the offline tools use scikit-learn for the same maths in memory.
+Each track is run through the Discogs-EffNet model (Essentia on TensorFlow) at 16 kHz mono. Per-frame activations are mean- and std-pooled into a 1536-dimension embedding that captures timbre and texture far better than BPM and key alone. Vectors are L2-normalised and stored in a `pgvector` column, so similarity is just cosine distance. The live API retrieves neighbours through a Postgres `match_tracks` RPC; the offline tools use scikit-learn for the same maths in memory.
 
 ### Library understanding through transfer learning
 
@@ -86,7 +88,7 @@ The LLM layer is a single OpenAI-compatible client multiplexed across Groq (prim
 
 ### The 3D map
 
-Track positions come from a UMAP projection of the 1280-dim embeddings down to three dimensions (`n_components=3`, `random_state=42`), computed offline and cached in the database. The frontend reads the precomputed coordinates and renders each track as a node textured with its album art, so the camera can fly to any track and trace similarity edges to its neighbours with no runtime dimensionality reduction.
+Track positions come from a UMAP projection of the 1536-dim embeddings down to three dimensions (`n_components=3`, `random_state=42`), computed offline and cached in the database. The frontend reads the precomputed coordinates and renders each track as a node textured with its album art, so the camera can fly to any track and trace similarity edges to its neighbours with no runtime dimensionality reduction.
 
 ---
 
@@ -107,7 +109,7 @@ Track positions come from a UMAP projection of the 1280-dim embeddings down to t
                              │
 ┌────────────────────────────▼──────────────────────────────────┐
 │                Supabase (Postgres + pgvector)                  │
-│   tracks (1280-dim embedding, UMAP x/y/z)                      │
+│   tracks (1536-dim embedding, UMAP x/y/z)                      │
 │   track_labels (tags, vibe, energy, tag_source provenance)     │
 └────────────────────────────▲──────────────────────────────────┘
                              │ writes embeddings, scores, coords
@@ -211,7 +213,7 @@ CREATE TABLE tracks (
     artist    TEXT,
     bpm       FLOAT,
     key       TEXT,
-    embedding VECTOR(1280),   -- Discogs-EffNet audio embedding
+    embedding VECTOR(1536),   -- Discogs-EffNet audio embedding (mean + std pooling)
     x_coord   FLOAT,          -- precomputed UMAP position
     y_coord   FLOAT,
     z_coord   FLOAT
