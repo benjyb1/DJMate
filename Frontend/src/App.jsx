@@ -6,6 +6,8 @@ import ForceGraph3D from 'react-force-graph-3d';
 import * as THREE from 'three';
 import DJChatbox from './components/DJChatbox';
 import LiveMode from './components/LiveMode';
+import NextTrack from './components/NextTrack';
+import NextTrackStandalone from './components/next/NextTrackStandalone';
 import PlaylistOrganiser from './components/playlist/PlaylistOrganiser';
 import AuthScreen from './components/AuthScreen';
 import ProfileTab from './components/ProfileTab';
@@ -198,12 +200,23 @@ function InlineEdit({ value, onSave, suggestions, type = 'text', color = '#00d4f
   );
 }
 
-const NAV_TABS = ['DISCOVERY', 'LIVE', 'PLAYLISTS', 'PROFILE'];
-const NAV_TABS_SHORT = { DISCOVERY: 'DISCOVER', LIVE: 'LIVE', PLAYLISTS: 'LISTS', PROFILE: 'PROFILE' };
+const NAV_TABS = ['DISCOVERY', 'NEXT', 'LIVE', 'PLAYLISTS', 'PROFILE'];
+const NAV_TABS_SHORT = { DISCOVERY: 'DISCOVER', NEXT: 'NEXT', LIVE: 'LIVE', PLAYLISTS: 'LISTS', PROFILE: 'PROFILE' };
+
+function useHash() {
+  const [hash, setHash] = useState(() => window.location.hash);
+  useEffect(() => {
+    const onChange = () => setHash(window.location.hash);
+    window.addEventListener('hashchange', onChange);
+    return () => window.removeEventListener('hashchange', onChange);
+  }, []);
+  return hash;
+}
 
 export default function App() {
   const reducedMotion = useReducedMotion();
   const { session, profile, loading, init, signOut } = useAuthStore();
+  const hash = useHash();
 
   useEffect(() => { init(); }, []);
 
@@ -213,6 +226,12 @@ export default function App() {
       syncFromProfile(profile);
     }
   }, [profile]);
+
+  // Next Track is local-only (rekordbox + files on this Mac), so it doesn't
+  // need a DJMate account. #next opens it straight away.
+  if (hash === '#next') {
+    return <NextTrackStandalone />;
+  }
 
   if (loading) {
     return (
@@ -790,6 +809,21 @@ function AppMain({ reducedMotion, onReconfigure }) {
               style={{ position: 'absolute', inset: 0 }}
             >
               <PlaylistOrganiser onIngestComplete={() => setGraphVersion(v => v + 1)} />
+            </m.div>
+          )}
+
+          {/* ── NEXT TRACK TAB ── */}
+          {activeTab === 'NEXT' && (
+            <m.div
+              key="next"
+              variants={tabVariants}
+              initial="initial"
+              animate="enter"
+              exit="exit"
+              transition={{ duration: 0.25 }}
+              style={{ position: 'absolute', inset: 0 }}
+            >
+              <NextTrack topInset={isMobile ? 64 : 84} />
             </m.div>
           )}
 
