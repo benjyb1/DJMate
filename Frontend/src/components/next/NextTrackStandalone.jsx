@@ -1,5 +1,4 @@
-// Next Track without the rest of DJMate: no sign-in, just the compass.
-// Reached via #next (and from the sign-in screen).
+// The DJMate shell: no sign-in, just the Next Track compass.
 import React from 'react';
 import NextTrack from '../NextTrack';
 import { IconWaveform } from '../icons';
@@ -24,8 +23,6 @@ export default function NextTrackStandalone() {
         </span>
         <span style={{ width: 1, height: 20, background: 'var(--border-panel)', margin: '0 6px' }} />
         <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.16em', color: 'var(--text-secondary)' }}>NEXT TRACK</span>
-        <div style={{ flex: 1 }} />
-        <a href="#" style={{ fontSize: 11.5, color: 'var(--text-muted)', textDecoration: 'none' }}>Full DJMate</a>
       </div>
       <NextTrack topInset={64} />
     </div>
