@@ -38,6 +38,7 @@ export const DIRECTION_META = {
 
 export const SOURCE_LABEL = {
   rekordbox: 'Live from rekordbox',
+  rekordbox_stale: 'Last played in rekordbox',
   explore: 'Exploring',
   mic: 'Heard on the mic',
   file: 'Dropped file',

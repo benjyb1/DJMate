@@ -15,6 +15,7 @@ import { Art, AxisBars, Chip, EnergyBars, Icon, IconButton, fmtBpm } from './nex
 
 const mono = "'JetBrains Mono', monospace";
 const POLL_MS = 2500;
+const STALE_SECONDS = 6 * 3600;
 const LISTEN_SECONDS = 15;
 
 function useElementSize(ref) {
@@ -38,13 +39,13 @@ function CentreTrack({ track, source, pct, compact, nearest, onJump, analysing, 
         display: 'inline-flex', alignItems: 'center', gap: 7, padding: '4px 11px',
         borderRadius: 'var(--radius-pill)', background: 'rgba(0,212,255,0.06)',
         border: '1px solid var(--border-cyan)', fontSize: 9.5, fontFamily: mono,
-        letterSpacing: '0.14em', color: source === 'rekordbox' ? 'var(--cyan)' : 'var(--purple-light)',
-        textTransform: 'uppercase',
+        letterSpacing: '0.14em', textTransform: 'uppercase',
+        color: source === 'rekordbox' ? 'var(--cyan)' : source === 'rekordbox_stale' ? 'var(--text-secondary)' : 'var(--purple-light)',
       }}>
         <span style={{
           width: 6, height: 6, borderRadius: '50%',
-          background: source === 'rekordbox' ? 'var(--cyan)' : 'var(--purple-bright)',
-          boxShadow: `0 0 8px ${source === 'rekordbox' ? 'var(--cyan)' : 'var(--purple-bright)'}`,
+          background: source === 'rekordbox' ? 'var(--cyan)' : source === 'rekordbox_stale' ? 'var(--text-muted)' : 'var(--purple-bright)',
+          boxShadow: source === 'rekordbox_stale' ? 'none' : `0 0 8px ${source === 'rekordbox' ? 'var(--cyan)' : 'var(--purple-bright)'}`,
           animation: source === 'rekordbox' && !reduce ? 'statusPulse 2s ease-in-out infinite' : 'none',
         }} />
         {analysing ? 'Analysing new track' : SOURCE_LABEL[source] || 'Now'}
@@ -544,10 +545,14 @@ export default function NextTrack({ topInset = 84 }) {
   }, [building, analysed, refreshStatus]);
 
   // ── suggestions for the current centre ──
+  // rekordbox's newest history row can be from weeks ago. Older than this and
+  // it's "last played", not live, and that old session doesn't exclude tracks.
+  const stale = (live?.age_seconds ?? 0) > STALE_SECONDS;
+
   // A ref, not a dependency: the played list changes on every poll and the
   // polling effect must not restart each time.
   const playedIdsRef = useRef([]);
-  playedIdsRef.current = live?.played_ids || [];
+  playedIdsRef.current = stale ? [] : (live?.played_ids || []);
   const requestSeq = useRef(0);
   const loadSuggestions = useCallback((track, extraExclude = []) => {
     if (!track?.id) return;
@@ -585,7 +590,8 @@ export default function NextTrack({ topInset = 84 }) {
         if (t.id !== lastLiveId.current) {
           lastLiveId.current = t.id;
           setTrail([]);
-          goTo(t, 'rekordbox', { exclude: n.played_ids });
+          const old = (n.age_seconds ?? 0) > STALE_SECONDS;
+          goTo(t, old ? 'rekordbox_stale' : 'rekordbox', { exclude: old ? [] : n.played_ids });
         }
       }).catch(() => {});
     };
@@ -594,7 +600,8 @@ export default function NextTrack({ topInset = 84 }) {
     return () => { stopped = true; clearInterval(iv); };
   }, [backendDown, analysed, goTo]);
 
-  const isLiveCentre = centre?.source === 'rekordbox';
+  const isLiveCentre = centre?.source?.startsWith('rekordbox');
+  const liveSource = stale ? 'rekordbox_stale' : 'rekordbox';
   const liveTrack = live?.state === 'ready' ? live?.track : null;
   const liveAnalysing = live?.state === 'analysing';
 
@@ -606,14 +613,14 @@ export default function NextTrack({ topInset = 84 }) {
   const backToLive = useCallback(() => {
     if (!liveTrack) return;
     setTrail([]);
-    goTo(liveTrack, 'rekordbox');
-  }, [liveTrack, goTo]);
+    goTo(liveTrack, liveSource);
+  }, [liveTrack, liveSource, goTo]);
 
   const backTo = useCallback((i) => {
     const t = trail[i];
     setTrail(tr => tr.slice(0, i));
-    goTo(t, i === 0 && lastLiveId.current === t.id ? 'rekordbox' : 'explore');
-  }, [trail, goTo]);
+    goTo(t, i === 0 && lastLiveId.current === t.id ? liveSource : 'explore');
+  }, [trail, liveSource, goTo]);
 
   // ── analyse external audio ──
   const analyseBlob = useCallback(async (blob, name, kind) => {
@@ -717,7 +724,9 @@ export default function NextTrack({ topInset = 84 }) {
             boxShadow: rb?.available && liveTrack ? '0 0 8px var(--cyan)' : 'none',
           }} />
           {rb?.available
-            ? (liveTrack || liveAnalysing ? 'REKORDBOX CONNECTED' : 'REKORDBOX · WAITING FOR A PLAY')
+            ? (stale && live?.started_at
+              ? `REKORDBOX · LAST SESSION ${new Date(live.started_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }).toUpperCase()}`
+              : liveTrack || liveAnalysing ? 'REKORDBOX CONNECTED' : 'REKORDBOX · WAITING FOR A PLAY')
             : 'REKORDBOX NOT FOUND'}
           {building && <span style={{ color: 'var(--purple-light)' }}>· ANALYSING {status.index.build.done}/{status.index.build.total}</span>}
         </div>
@@ -836,7 +845,7 @@ export default function NextTrack({ topInset = 84 }) {
             </>
           ) : (
             <>
-              <span style={{ fontSize: 9.5, fontFamily: mono, letterSpacing: '0.14em', color: 'var(--text-muted)' }}>PLAYED TONIGHT · {live.played.length}</span>
+              <span style={{ fontSize: 9.5, fontFamily: mono, letterSpacing: '0.14em', color: 'var(--text-muted)' }}>{stale ? 'LAST SESSION' : 'PLAYED TONIGHT'} · {live.played.length}</span>
               {live.played.slice(0, -1).slice(-10).map(p => (
                 <span key={p.id + p.played_at} title={`${p.artist} – ${p.title}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)', opacity: 0.8 }}>
                   <Art track={p} size={20} radius="50%" />
