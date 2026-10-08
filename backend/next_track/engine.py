@@ -96,7 +96,13 @@ class Params:
         return replace(self, **kw)
 
 
-DEFAULT_PARAMS = Params()
+# Chosen with scripts/eval_next_track.py (October 2026, 1,061 tracks):
+# outro-vs-intro fit put your real next track on screen 38% of the time vs
+# 25%, in a direction's top 3 31% vs 19%, with the mixing-rule scores no
+# worse. Crate affinity added nothing on top, so it's off. Halftime only
+# affects the ~3% of tracks outside 100-150 BPM. Small sample (16 clean
+# transitions), so treat these as a direction, not a verdict.
+DEFAULT_PARAMS = Params(w_transition=1.0, halftime=True)
 
 
 def _rank01(x: np.ndarray) -> np.ndarray:

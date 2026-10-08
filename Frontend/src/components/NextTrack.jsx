@@ -52,18 +52,15 @@ function CentreTrack({ track, source, pct, compact, nearest, onJump, analysing, 
       </div>
 
       <div style={{ position: 'relative', width: artSize, height: artSize }}>
-        {!reduce && (
-          <m.div
-            aria-hidden
-            animate={{ rotate: 360 }}
-            transition={{ duration: 18, repeat: Infinity, ease: 'linear' }}
-            style={{
-              position: 'absolute', inset: -10, borderRadius: 26,
-              background: 'conic-gradient(from 0deg, rgba(0,212,255,0.0), rgba(0,212,255,0.45), rgba(124,58,237,0.0), rgba(168,85,247,0.5), rgba(0,212,255,0.0))',
-              filter: 'blur(14px)', opacity: 0.8,
-            }}
-          />
-        )}
+        {/* Static glow. A rotating blurred ring looked nice but kept the GPU
+            at ~50% all set long, which rekordbox needs more. */}
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute', inset: -28, borderRadius: 40, pointerEvents: 'none',
+            background: 'radial-gradient(closest-side, rgba(0,212,255,0.22), rgba(124,58,237,0.16) 60%, transparent)',
+          }}
+        />
         <AnimatePresence mode="wait">
           <m.div
             key={track?.id || 'none'}
@@ -162,8 +159,9 @@ function DirectionCard({ dir, onPick, onReveal, cardRef, popUp, compact }) {
         onKeyDown={(e) => { if (main && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onPick(main); } }}
         style={{
           cursor: main ? 'pointer' : 'default',
-          background: hover && main ? 'var(--bg-card-hover)' : 'var(--glass-bg)',
-          backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))',
+          // Solid, not backdrop-blurred: the arrows animate underneath, and a
+          // live blur over moving content is redrawn every frame.
+          background: hover && main ? 'rgba(18, 18, 38, 0.96)' : 'rgba(10, 10, 24, 0.92)',
           border: `1px solid ${hover && main ? `${color}66` : 'var(--glass-border)'}`,
           borderRadius: 'var(--radius-lg)', padding: 12,
           boxShadow: hover && main ? `var(--shadow-card-hover), 0 0 28px ${color}22` : 'var(--shadow-card)',
