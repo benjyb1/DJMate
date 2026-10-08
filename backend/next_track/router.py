@@ -78,7 +78,8 @@ def _analyse_external_in_background(row: dict):
 
     def work():
         idx = _idx()
-        res = idx.analyser.analyse(row["path"], want_rhythm=not row.get("bpm"))
+        res = idx.analyser.analyse(row["path"], want_rhythm=not row.get("bpm"),
+                                   mode="quick", duration=row.get("duration"))
         with _state_lock:
             if res is None:
                 _pending[tid]["error"] = "Couldn't analyse this file"
@@ -171,7 +172,8 @@ async def analyse_upload(file: UploadFile = File(...), kind: str = Form("file"))
     try:
         tmp.write(await file.read())
         tmp.close()
-        res = await _run_blocking(idx.analyser.analyse, tmp.name, True)
+        res = await _run_blocking(
+            lambda: idx.analyser.analyse(tmp.name, want_rhythm=True, mode="quick"))
     finally:
         try:
             os.unlink(tmp.name)
@@ -199,9 +201,9 @@ async def analyse_upload(file: UploadFile = File(...), kind: str = Form("file"))
     return {"track": engine.public_track(e), "nearest": nearest}
 
 
-async def _run_blocking(fn, *args):
+async def _run_blocking(fn):
     import anyio
-    return await anyio.to_thread.run_sync(lambda: fn(*args))
+    return await anyio.to_thread.run_sync(fn)
 
 
 # ── artwork & Finder ────────────────────────────────────────────────────────

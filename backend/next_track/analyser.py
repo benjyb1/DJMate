@@ -7,7 +7,17 @@ One pass over the audio yields everything Next Track needs about a track:
 - per-track probabilities from the Essentia heads (party, aggressive, relaxed,
   electronic, voice, happy, sad) that define the suggestion directions,
 - the top Discogs styles from the 400-class genre head, for display,
+- mean activations of the first and last minute (intro/outro), for judging
+  how one track's ending sits against another's start,
 - optionally BPM and key, for audio that rekordbox hasn't analysed.
+
+Only the parts that are analysed get decoded: ffmpeg seeks to the middle four
+minutes, the first minute and the last minute. Modes:
+
+- "full": everything (library builds),
+- "quick": the middle two minutes plus the outro (a track on air right now,
+  a dropped file or a mic clip, where speed matters),
+- "edges": intro and outro only (tracks analysed before those existed).
 
 Essentia and TensorFlow can segfault on malformed files, so the models live in
 a ``spawn`` subprocess (same pattern as ``scripts/ingest_music.py``). A crash
@@ -19,6 +29,8 @@ import json
 import logging
 import multiprocessing
 import os
+import shutil
+import subprocess
 import threading
 from pathlib import Path
 from typing import Optional
@@ -50,12 +62,74 @@ def _head_path(stem: str, ext: str) -> str:
     return str(paths.models_dir() / f"{stem}-discogs-effnet-1.{ext}")
 
 
-def _middle(audio, sr: int, seconds: int):
-    n = int(seconds * sr)
-    if len(audio) <= n:
-        return audio
-    start = (len(audio) - n) // 2
-    return audio[start:start + n]
+EDGE_SECONDS = 60
+QUICK_SECONDS = 120
+FFMPEG = shutil.which("ffmpeg") or next(
+    (p for p in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg") if os.path.exists(p)), None)
+FFPROBE = shutil.which("ffprobe") or next(
+    (p for p in ("/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe") if os.path.exists(p)), None)
+
+
+class _Loader:
+    """Reads just the parts of a file the analysis needs.
+
+    With ffmpeg, each segment is a seek plus a short decode, so a seven-minute
+    track costs a few seconds of audio rather than the whole file. Without
+    ffmpeg it falls back to decoding the whole file once with Essentia and
+    slicing.
+    """
+
+    def __init__(self, path: str, duration: Optional[float], es):
+        self.path, self.es = path, es
+        self._full: dict[int, object] = {}
+        self.channels = None
+        probed = self._probe()
+        self.duration = duration or probed
+
+    def _probe(self) -> Optional[float]:
+        if FFPROBE:
+            try:
+                out = subprocess.run(
+                    [FFPROBE, "-v", "error", "-select_streams", "a:0",
+                     "-show_entries", "stream=channels:format=duration",
+                     "-of", "default=nw=1:nk=1", self.path],
+                    capture_output=True, text=True, timeout=30)
+                vals = [v for v in out.stdout.split() if v and v != "N/A"]
+                self.channels = int(vals[0])
+                return float(vals[1])
+            except Exception:
+                pass
+        a = self._decode_all(EMB_SR)
+        return len(a) / EMB_SR
+
+    def _decode_all(self, sr: int):
+        if sr not in self._full:
+            self._full[sr] = self.es.MonoLoader(filename=self.path, sampleRate=sr,
+                                                resampleQuality=4)()
+        return self._full[sr]
+
+    def segment(self, start: float, seconds: float, sr: int):
+        import numpy as np
+        if FFMPEG and self.channels:
+            # Downmix as Essentia's MonoLoader does, a plain average of the
+            # channels. ffmpeg's own "-ac 1" is 3 dB louder, and EffNet is
+            # level-sensitive, so the fingerprints would drift.
+            n = self.channels
+            mix = ([] if n == 1 else
+                   ["-af", "pan=mono|c0=" + "+".join(f"{1 / n:.6f}*c{i}" for i in range(n))])
+            try:
+                proc = subprocess.run(
+                    [FFMPEG, "-v", "error", "-nostdin", "-ss", f"{start:.3f}",
+                     "-t", f"{seconds:.3f}", "-i", self.path, "-vn", *mix, "-ac", "1",
+                     "-ar", str(sr), "-f", "f32le", "-"],
+                    capture_output=True, timeout=120)
+                if proc.returncode == 0 and proc.stdout:
+                    return np.frombuffer(proc.stdout, dtype=np.float32).copy()
+            except Exception:
+                pass
+        a = self._decode_all(sr)
+        i = int(start * sr)
+        return a[i:i + int(seconds * sr)]
 
 
 def _worker_loop(effnet_path: str, task_q, result_q):
@@ -102,27 +176,41 @@ def _worker_loop(effnet_path: str, task_q, result_q):
             continue
         if task is None:
             break
-        path, want_rhythm = task
+        path, want_rhythm, mode, duration = task
         try:
-            if want_rhythm:
-                full = es.MonoLoader(filename=path, sampleRate=RHYTHM_SR,
-                                     resampleQuality=4)()
-                full = _middle(full, RHYTHM_SR, MAX_SECONDS)
-                audio = es.Resample(inputSampleRate=RHYTHM_SR,
-                                    outputSampleRate=EMB_SR, quality=4)(full)
-            else:
-                full = None
-                audio = es.MonoLoader(filename=path, sampleRate=EMB_SR,
-                                      resampleQuality=4)()
-                duration = len(audio) / EMB_SR
-                audio = _middle(audio, EMB_SR, MAX_SECONDS)
-            if len(audio) < 3 * EMB_SR:
+            loader = _Loader(path, duration, es)
+            duration = loader.duration
+            if not duration or duration < 3:
                 result_q.put(("error", "audio shorter than 3 seconds"))
                 continue
 
-            patches = np.array(backbone(audio))
-            if patches.ndim != 2 or not np.isfinite(patches).all():
-                result_q.put(("error", f"bad embedding {patches.shape}"))
+            def embed(start, seconds):
+                a = loader.segment(start, seconds, EMB_SR)
+                if len(a) < 3 * EMB_SR:
+                    return None
+                p = np.array(backbone(a))
+                return p if p.ndim == 2 and np.isfinite(p).all() else None
+
+            # Intro and outro: how the track starts and ends, for judging how
+            # this track's outro sits against another's intro. "quick" (a track
+            # on air right now) skips the intro: only its outro matters for
+            # what comes next, and every second counts.
+            intro = None if mode == "quick" else embed(0, EDGE_SECONDS)
+            outro = embed(max(0.0, duration - EDGE_SECONDS), EDGE_SECONDS)
+            edges = {
+                "intro": intro.mean(axis=0).astype(np.float32).tolist() if intro is not None else None,
+                "outro": outro.mean(axis=0).astype(np.float32).tolist() if outro is not None else None,
+                "duration": round(duration, 1),
+            }
+            if mode == "edges":
+                result_q.put(("ok", edges))
+                continue
+
+            window = QUICK_SECONDS if mode == "quick" else MAX_SECONDS
+            mid_start = max(0.0, (duration - window) / 2)
+            patches = embed(mid_start, window)
+            if patches is None:
+                result_q.put(("error", "couldn't embed the audio"))
                 continue
             emb = np.concatenate([patches.mean(axis=0), patches.std(axis=0)])
 
@@ -139,10 +227,10 @@ def _worker_loop(effnet_path: str, task_q, result_q):
                 "emb": emb.astype(np.float32).tolist(),
                 "heads": head_out,
                 "genres": genres,
+                **edges,
             }
             if want_rhythm:
-                out["duration"] = None
-                window = _middle(full, RHYTHM_SR, 90)
+                window = loader.segment(max(0.0, (duration - 90) / 2), 90, RHYTHM_SR)
                 bpm, *_ = es.RhythmExtractor2013(method="multifeature")(window)
                 bpm = float(bpm)
                 # Fold into the dance-music range: 63 BPM is really 126.
@@ -154,8 +242,6 @@ def _worker_loop(effnet_path: str, task_q, result_q):
                 out["bpm"] = round(bpm, 1)
                 out["key"] = f"{key}{'m' if scale == 'minor' else ''}"
                 out["key_strength"] = round(float(strength), 3)
-            else:
-                out["duration"] = round(duration, 1)
             result_q.put(("ok", out))
         except Exception as exc:
             result_q.put(("error", f"{type(exc).__name__}: {exc}"))
@@ -205,12 +291,16 @@ class Analyser:
         self._proc = None
 
     def analyse(self, path: str | Path, want_rhythm: bool = False,
-                timeout: int = 180) -> Optional[dict]:
-        """Analyse one file. Returns the feature dict, or None if it failed."""
+                timeout: int = 180, mode: str = "full",
+                duration: Optional[float] = None) -> Optional[dict]:
+        """Analyse one file. Returns the feature dict, or None if it failed.
+
+        mode="edges" only computes the intro/outro embeddings (cheap, for
+        tracks analysed before those existed)."""
         with self._lock:
             if self._proc is None or not self._proc.is_alive():
                 self._start()
-            self._task_q.put((str(path), want_rhythm))
+            self._task_q.put((str(path), want_rhythm, mode, duration))
             try:
                 status, result = self._result_q.get(timeout=timeout)
             except Exception:

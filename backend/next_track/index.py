@@ -38,6 +38,7 @@ INDEX_VERSION = 1
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".aiff", ".aif"}
 SAVE_EVERY = 20
 BUILD_WORKERS = int(os.getenv("NEXT_TRACK_WORKERS", "3"))
+CRATE_MIN = 10   # crates smaller than this are too thin to learn
 MIN_TRACK_SECONDS = 60
 # Clip identification. Calibrated on degraded 15 s "room" recordings of library
 # tracks: the true track was top-1 in 8/10 and these thresholds kept the one
@@ -93,8 +94,12 @@ class LibraryIndex:
         self._lock = threading.RLock()
         self.entries: dict[str, dict] = {}
         self._emb: dict[str, np.ndarray] = {}
+        # Mean EffNet activations of the first and last minute of each track.
+        self._intro: dict[str, np.ndarray] = {}
+        self._outro: dict[str, np.ndarray] = {}
         self.externals: dict[str, dict] = {}
         self._ext_emb: dict[str, np.ndarray] = {}
+        self._ext_outro: dict[str, np.ndarray] = {}
         self.build_state = {"running": False, "done": 0, "total": 0,
                             "current": None, "started_at": None,
                             "finished_at": None, "error": None, "failed": 0}
@@ -103,6 +108,12 @@ class LibraryIndex:
         self.lib_ids: list[str] = []
         self.Xn = np.zeros((0, 0), dtype=np.float32)
         self.Xid = np.zeros((0, 0), dtype=np.float32)
+        self.IntroN = np.zeros((0, 0), dtype=np.float32)
+        self.CrateP = None
+        self._crate_model = None
+        self._has_edges = np.zeros(0, dtype=bool)
+        self._edge_mu = None
+        self._edge_sd = None
         self._mu = None
         self._sd = None
         self.axis_vals: dict[str, np.ndarray] = {}
@@ -118,6 +129,9 @@ class LibraryIndex:
     def _files(self):
         d = paths.data_dir()
         return d / "index.json", d / "embeddings.npy"
+
+    def _edges_file(self):
+        return paths.data_dir() / "edges.npz"
 
     def maybe_reload(self):
         """Pick up an index another process (the CLI build) has saved since."""
@@ -142,10 +156,16 @@ class LibraryIndex:
                 log.warning("Next Track index version changed; rebuilding from scratch")
                 return
             mat = np.load(emb_p) if emb_p.exists() else np.zeros((0, 0))
+            edges_p = self._edges_file()
+            edges = np.load(edges_p) if edges_p.exists() else None
             with self._lock:
                 self.entries = {e["id"]: e for e in meta["entries"]}
                 self._emb = {i: mat[r] for r, i in enumerate(meta.get("emb_ids", []))
                              if r < len(mat)}
+                if edges is not None:
+                    eids = [str(x) for x in edges["ids"]]
+                    self._intro = {i: edges["intro"][r] for r, i in enumerate(eids)}
+                    self._outro = {i: edges["outro"][r] for r, i in enumerate(eids)}
                 self._derive()
             log.info("Next Track index loaded: %d entries, %d analysed",
                      len(self.entries), len(self._emb))
@@ -160,10 +180,20 @@ class LibraryIndex:
                    if ids else np.zeros((0, 0), dtype=np.float32))
             meta = {"version": INDEX_VERSION, "saved_at": time.time(),
                     "entries": list(self.entries.values()), "emb_ids": ids}
+            eids = [i for i in self._intro if i in self._outro]
+            edges = ({"ids": np.array(eids),
+                      "intro": np.stack([self._intro[i] for i in eids]).astype(np.float32),
+                      "outro": np.stack([self._outro[i] for i in eids]).astype(np.float32)}
+                     if eids else None)
         tmp_meta = meta_p.with_suffix(".json.tmp")
         tmp_meta.write_text(json.dumps(meta))
         with open(emb_p.with_suffix(".tmp.npy"), "wb") as fh:
             np.save(fh, mat)
+        if edges is not None:
+            edges_p = self._edges_file()
+            with open(edges_p.with_suffix(".tmp.npz"), "wb") as fh:
+                np.savez(fh, **edges)
+            os.replace(edges_p.with_suffix(".tmp.npz"), edges_p)
         os.replace(emb_p.with_suffix(".tmp.npy"), emb_p)
         os.replace(tmp_meta, meta_p)
         self._loaded_mtime = meta_p.stat().st_mtime
@@ -221,11 +251,14 @@ class LibraryIndex:
             self._build_thread.start()
             return True
 
-    def _needs_analysis(self, row: dict) -> bool:
+    def _needs_analysis(self, row: dict) -> Optional[str]:
+        """'full', 'edges' (only the intro/outro are missing) or None."""
         old = self.entries.get(row["id"])
-        if row["id"] not in self._emb or old is None:
-            return True
-        return old.get("mtime") != row["mtime"]
+        if row["id"] not in self._emb or old is None or old.get("mtime") != row["mtime"]:
+            return "full"
+        if row["id"] not in self._outro:
+            return "edges"
+        return None
 
     def _build(self):
         st = self.build_state
@@ -246,11 +279,14 @@ class LibraryIndex:
                             if old.get(k) and not r.get(k):
                                 merged[k] = old[k]
                     self.entries[r["id"]] = merged
-                    if self._needs_analysis(merged):
-                        todo.append(merged)
+                    mode = self._needs_analysis(merged)
+                    if mode:
+                        todo.append((merged, mode))
                 for gone in set(self.entries) - live:
                     self.entries.pop(gone, None)
                     self._emb.pop(gone, None)
+                    self._intro.pop(gone, None)
+                    self._outro.pop(gone, None)
                 self._derive()
             st["total"] = len(todo)
             log.info("Next Track build: %d tracks, %d to analyse", len(rows), len(todo))
@@ -267,7 +303,7 @@ class LibraryIndex:
         finally:
             st.update(running=False, current=None, finished_at=time.time())
 
-    def _analyse_all(self, todo: list[dict]):
+    def _analyse_all(self, todo: list[tuple[dict, str]]):
         """Run the analysis queue across a few worker subprocesses. EffNet
         doesn't saturate an Apple Silicon CPU on its own, so two or three
         workers roughly halve a first full-library build."""
@@ -284,11 +320,12 @@ class LibraryIndex:
                 with self._lock:
                     if not queue or fatal:
                         return
-                    e = queue.pop()
+                    e, mode = queue.pop()
                     st["current"] = f"{e.get('artist') or ''} - {e.get('title') or ''}".strip(" -")
-                want_rhythm = not e.get("bpm") or not e.get("camelot")
+                want_rhythm = mode == "full" and (not e.get("bpm") or not e.get("camelot"))
                 try:
-                    res = an.analyse(e["path"], want_rhythm=want_rhythm)
+                    res = an.analyse(e["path"], want_rhythm=want_rhythm, mode=mode,
+                                     duration=e.get("duration"))
                 except AnalyserUnavailable as exc:
                     with self._lock:
                         fatal.append(exc)
@@ -297,6 +334,8 @@ class LibraryIndex:
                     if res is None:
                         st["failed"] += 1
                         e["error"] = "analysis failed"
+                    elif mode == "edges":
+                        self._apply_edges(e["id"], res)
                     else:
                         self._apply_analysis(e, res)
                     st["done"] += 1
@@ -328,6 +367,12 @@ class LibraryIndex:
             e["camelot"] = keys.to_camelot(res["key"])
             e["key_estimated"] = True
         self._emb[e["id"]] = np.asarray(res["emb"], dtype=np.float32)
+        self._apply_edges(e["id"], res)
+
+    def _apply_edges(self, tid: str, res: dict):
+        if res.get("intro") is not None and res.get("outro") is not None:
+            self._intro[tid] = np.asarray(res["intro"], dtype=np.float32)
+            self._outro[tid] = np.asarray(res["outro"], dtype=np.float32)
 
     # ── derived arrays ──────────────────────────────────────────────────────
     def _raw_axes(self, heads_rows: list[dict], camelots: list, bpms: np.ndarray,
@@ -410,6 +455,96 @@ class LibraryIndex:
             self._axis_sorted[a] = np.sort(vals[a])
         for r, e in enumerate(ents):
             e["energy"] = round(float(vals["energy"][r]), 2)
+        self._derive_edges(ids)
+        self._derive_crates(ents)
+
+    def _derive_crates(self, ents: list[dict]):
+        """Crate affinity: which of your crates does each track sound like it
+        belongs in? A classifier over the EffNet embedding, predicting crate
+        folders with at least CRATE_MIN tracks.
+
+        Library tracks get out-of-fold predictions (5-fold), so a track's own
+        filing never feeds its own vector: it reflects how the crate sounds,
+        not where you happened to put the file."""
+        self.CrateP = None
+        self._crate_model = None
+        try:
+            from sklearn.decomposition import PCA
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.model_selection import StratifiedKFold
+        except ImportError:
+            return
+        crates = [e.get("crate") for e in ents]
+        counts: dict[str, int] = {}
+        for c in crates:
+            if c:
+                counts[c] = counts.get(c, 0) + 1
+        keep = sorted(c for c, n in counts.items() if n >= CRATE_MIN)
+        if len(keep) < 3:
+            return
+        labelled = np.array([c in keep for c in crates])
+        y = np.array([keep.index(c) if c in keep else -1 for c in crates])
+        pca = PCA(n_components=min(64, self.Xn.shape[1], len(ents) - 1), random_state=0)
+        F = pca.fit_transform(self.Xn)
+
+        def model():
+            return LogisticRegression(C=0.5, max_iter=2000)
+
+        P = np.zeros((len(ents), len(keep)))
+        Fl, yl = F[labelled], y[labelled]
+        idx_l = np.where(labelled)[0]
+        folds = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
+        for tr, te in folds.split(Fl, yl):
+            m = model().fit(Fl[tr], yl[tr])
+            P[idx_l[te]] = m.predict_proba(Fl[te])
+        full = model().fit(Fl, yl)
+        if (~labelled).any():
+            P[~labelled] = full.predict_proba(F[~labelled])
+        self.CrateP = P / (np.linalg.norm(P, axis=1, keepdims=True) + 1e-9)
+        self._crate_model = (pca, full)
+        self._crate_names = keep
+
+    def _crate_vec(self, tid: str) -> Optional[np.ndarray]:
+        if self.CrateP is None:
+            return None
+        if tid in self._row_of:
+            return self.CrateP[self._row_of[tid]]
+        feats = self.features_for(tid)
+        if feats is None:
+            return None
+        pca, full = self._crate_model
+        p = full.predict_proba(pca.transform(feats["vec"][None, :]))[0]
+        return p / (np.linalg.norm(p) + 1e-9)
+
+    def _derive_edges(self, ids: list[str]):
+        """Standardised intro matrix, so a track's outro can be compared with
+        every candidate's intro in one product."""
+        has = np.array([i in self._intro and i in self._outro for i in ids], dtype=bool)
+        self._has_edges = has
+        if has.sum() < 20:
+            self.IntroN = np.zeros((0, 0), dtype=np.float32)
+            return
+        both = np.concatenate([np.stack([self._intro[i] for i, h in zip(ids, has) if h]),
+                               np.stack([self._outro[i] for i, h in zip(ids, has) if h])])
+        self._edge_mu = both.mean(axis=0)
+        self._edge_sd = both.std(axis=0) + 1e-6
+        dim = both.shape[1]
+        intro = np.zeros((len(ids), dim), dtype=np.float32)
+        for r, i in enumerate(ids):
+            if has[r]:
+                intro[r] = self._intro[i]
+        Z = (intro - self._edge_mu) / self._edge_sd
+        Z[~has] = 0
+        self.IntroN = Z / (np.linalg.norm(Z, axis=1, keepdims=True) + 1e-9)
+
+    def _outro_vec(self, tid: str) -> Optional[np.ndarray]:
+        o = self._outro.get(tid)
+        if o is None:
+            o = self._ext_outro.get(tid)
+        if o is None or self._edge_mu is None:
+            return None
+        z = (o - self._edge_mu) / self._edge_sd
+        return z / (np.linalg.norm(z) + 1e-9)
 
     # ── lookups used by the engine ──────────────────────────────────────────
     def features_for(self, tid: str) -> Optional[dict]:
@@ -438,6 +573,28 @@ class LibraryIndex:
         e["energy"] = round(axes["energy"], 2)
         return {"vec": vec.astype(np.float32), "axes": axes,
                 "pct": {a: min(1.0, v) for a, v in pct.items()}, "row": None}
+
+    def extra_similarities(self, tid: str) -> dict:
+        """Optional fit signals beyond whole-track similarity, each an array
+        aligned with ``lib_ids``. Missing signals are simply absent.
+
+        transition: how this track's last minute sounds against each
+        candidate's first minute. Candidates without intro data get the
+        median, so they're neither helped nor hurt.
+        """
+        out = {}
+        with self._lock:
+            o = self._outro_vec(tid)
+            if o is not None and self.IntroN.shape[0] == len(self.lib_ids):
+                s = self.IntroN @ o
+                has = self._has_edges
+                if has.any():
+                    s = np.where(has, s, np.median(s[has]))
+                out["transition"] = s
+            c = self._crate_vec(tid)
+            if c is not None:
+                out["crate"] = self.CrateP @ c
+        return out
 
     def identify(self, emb) -> Optional[dict]:
         """Which library track is this audio? Returns the best match, its
@@ -489,6 +646,8 @@ class LibraryIndex:
         with self._lock:
             self.externals[e["id"]] = e
             self._ext_emb[e["id"]] = np.asarray(res["emb"], dtype=np.float32)
+            if res.get("outro") is not None:
+                self._ext_outro[e["id"]] = np.asarray(res["outro"], dtype=np.float32)
             # Fill in its energy for display.
             if self.lib_ids:
                 self._external_features(e, self._ext_emb[e["id"]])
