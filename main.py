@@ -31,6 +31,7 @@ from backend.playlist_router import router as playlist_router
 from backend.ingest_router import router as ingest_router
 from backend.suggested_playlist_router import router as suggested_playlist_router
 from backend.setup_router import router as setup_router
+from backend.next_track.router import router as next_track_router
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ app.include_router(playlist_router, prefix="/playlists", tags=["playlists"])
 app.include_router(ingest_router, prefix="/ingest", tags=["ingest"])
 app.include_router(suggested_playlist_router, prefix="/suggested-playlists", tags=["suggested-playlists"])
 app.include_router(setup_router, prefix="/setup", tags=["setup"])
+app.include_router(next_track_router, prefix="/next", tags=["next-track"])
 # ── Request models ────────────────────────────────────────────────────────────
 
 class NaturalLanguageQuery(BaseModel):

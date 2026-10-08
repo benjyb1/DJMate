@@ -267,6 +267,20 @@ export default function AuthScreen() {
             {mode === 'signin' ? 'Sign up' : 'Sign in'}
           </span>
         </p>
+
+        {/* ── Next Track needs no account ─────────────────── */}
+        <a
+          href="#next"
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            marginTop: 18, padding: '11px 14px', borderRadius: 8, textDecoration: 'none',
+            border: '1px solid rgba(0,212,255,0.25)', background: 'rgba(0,212,255,0.05)',
+            color: '#00d4ff', fontSize: 13, fontWeight: 600,
+          }}
+        >
+          Open Next Track
+          <span style={{ color: '#64748b', fontWeight: 400 }}>· no sign-in, runs on this Mac</span>
+        </a>
       </m.div>
     </div>
   );

@@ -154,6 +154,19 @@ body, html, #root {
   50%      { opacity: 1; }
 }
 
+/* ── Next Track ─────────────────────────────────────────── */
+@keyframes ntDash {
+  to { stroke-dashoffset: -24; }
+}
+.nt-dash { animation: ntDash 1.2s linear infinite; }
+.nt-spinner {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 2px solid rgba(148, 163, 184, 0.18);
+  border-top-color: var(--cyan);
+  border-right-color: var(--purple-bright);
+  animation: spin 0.9s linear infinite;
+}
+
 /* ── Focus styles ──────────────────────────────────────── */
 :focus-visible {
   outline: 2px solid var(--purple-bright);
