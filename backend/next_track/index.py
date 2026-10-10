@@ -163,9 +163,13 @@ class LibraryIndex:
                 self._emb = {i: mat[r] for r, i in enumerate(meta.get("emb_ids", []))
                              if r < len(mat)}
                 if edges is not None:
+                    # Read each array once: indexing an NpzFile re-reads the
+                    # whole array, and every row kept its own copy alive
+                    # (about 10 GB across a library after a few reloads).
                     eids = [str(x) for x in edges["ids"]]
-                    self._intro = {i: edges["intro"][r] for r, i in enumerate(eids)}
-                    self._outro = {i: edges["outro"][r] for r, i in enumerate(eids)}
+                    intro, outro = edges["intro"], edges["outro"]
+                    self._intro = {i: intro[r] for r, i in enumerate(eids)}
+                    self._outro = {i: outro[r] for r, i in enumerate(eids)}
                 self._derive()
             log.info("Next Track index loaded: %d entries, %d analysed",
                      len(self.entries), len(self._emb))
