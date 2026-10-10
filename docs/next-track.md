@@ -1,4 +1,4 @@
-# Next Track
+# Needle (Next Track)
 
 A rekordbox companion. It watches what rekordbox is playing and shows a compass
 around it: one track per direction (more energy, darker, faster, more vocal,

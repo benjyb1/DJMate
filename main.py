@@ -1,5 +1,5 @@
 '''
-DJMate API: the Next Track backend.
+Needle (DJMate) API: the Next Track backend.
 
     uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
@@ -22,7 +22,7 @@ from backend.next_track.router import router as next_track_router
 
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="DJMate", version="3.0.0")
+app = FastAPI(title="Needle", version="3.0.0")
 
 CORS_ORIGINS = os.getenv(
     "CORS_ORIGINS",
@@ -42,7 +42,7 @@ app.include_router(next_track_router, prefix="/next", tags=["next-track"])
 @app.get("/")
 async def root():
     """Health check (the desktop app waits for this before opening)."""
-    return {"status": "healthy", "service": "DJMate Next Track", "version": "3.0.0"}
+    return {"status": "healthy", "service": "Needle", "version": "3.0.0"}
 
 
 if __name__ == "__main__":

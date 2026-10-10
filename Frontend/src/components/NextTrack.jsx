@@ -455,7 +455,7 @@ function Onboarding({ status, onBuild }) {
         background: 'var(--glass-bg)', border: '1px solid var(--glass-border)', boxShadow: 'var(--shadow-panel)',
         backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)', textAlign: 'center',
       }}>
-        <div style={{ fontSize: 10, fontFamily: mono, letterSpacing: '0.16em', color: 'var(--cyan)', marginBottom: 12 }}>NEXT TRACK</div>
+        <div style={{ fontSize: 10, fontFamily: mono, letterSpacing: '0.16em', color: 'var(--cyan)', marginBottom: 12 }}>NEEDLE</div>
         <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-primary)' }}>
           {running ? 'Listening to your library' : 'First, let it hear your music'}
         </div>
@@ -688,7 +688,7 @@ export default function NextTrack({ topInset = 84 }) {
   // ── render ──
   if (backendDown) {
     return <div style={{ position: 'absolute', inset: 0, paddingTop: topInset }}>
-      <Notice title="Next Track runs on your Mac" body="Open the DJMate desktop app (or start the backend on port 8000). It reads rekordbox and your audio files locally, so it can't run from the website alone." />
+      <Notice title="Needle runs on your Mac" body="Open the Needle desktop app (or start the backend on port 8000). It reads rekordbox and your audio files locally, so it can't run from the website alone." />
     </div>;
   }
   if (status && !analysed) {

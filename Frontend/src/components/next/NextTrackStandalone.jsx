@@ -1,7 +1,10 @@
-// The DJMate shell: no sign-in, just the Next Track compass.
+// The Needle shell: no sign-in, just the compass.
 import React from 'react';
 import NextTrack from '../NextTrack';
-import { IconWaveform } from '../icons';
+
+// In the desktop app the window has no title bar: the traffic-light buttons
+// sit over the top-left corner, and the header is what you drag the window by.
+const IN_ELECTRON = typeof navigator !== 'undefined' && /Electron/i.test(navigator.userAgent);
 
 export default function NextTrackStandalone() {
   return (
@@ -11,18 +14,15 @@ export default function NextTrackStandalone() {
     }}>
       <div style={{
         position: 'absolute', top: 0, left: 0, right: 0, height: 64, zIndex: 50,
-        display: 'flex', alignItems: 'center', gap: 10, padding: '0 24px',
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: IN_ELECTRON ? '0 24px 0 88px' : '0 24px',
+        WebkitAppRegion: IN_ELECTRON ? 'drag' : undefined,
       }}>
-        <div style={{
-          width: 26, height: 26, borderRadius: 'var(--radius-sm)',
-          background: 'linear-gradient(135deg, rgba(124,58,237,0.25), rgba(0,212,255,0.15))',
-          border: '1px solid rgba(124,58,237,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}><IconWaveform /></div>
-        <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: '0.12em' }}>
-          <span style={{ color: '#e2e8f0' }}>DJ</span><span style={{ color: '#a855f7' }}>MATE</span>
+        <img src="/needle.svg" alt="" width={30} height={30} draggable={false}
+          style={{ display: 'block', margin: '0 -2px' }} />
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: '0.2em', color: '#e2e8f0' }}>
+          NEEDLE
         </span>
-        <span style={{ width: 1, height: 20, background: 'var(--border-panel)', margin: '0 6px' }} />
-        <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.16em', color: 'var(--text-secondary)' }}>NEXT TRACK</span>
       </div>
       <NextTrack topInset={64} />
     </div>
