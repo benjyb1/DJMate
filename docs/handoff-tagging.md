@@ -48,8 +48,8 @@ work. This note covers the in-progress tagging work.
 
 ## In progress when handed off
 
-1. `fetch_discogs_tags.py` was at 860/1041 (596 matched). It resumes where
-   it stopped: `.venv1/bin/python scripts/fetch_discogs_tags.py`.
+1. `fetch_discogs_tags.py` **finished**: 713 of 1,061 tracks matched
+   (`discogs.json`). Re-run with `--retry-missing` only if matching improves.
 2. The mood pass (`scripts/build_next_track_index.py`) was at 485/1076. It
    also resumes (tracks without `moods` get `mode="moods"`).
    Check whether either is still running before restarting (`pgrep -fl
