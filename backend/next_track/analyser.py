@@ -17,7 +17,8 @@ minutes, the first minute and the last minute. Modes:
 - "full": everything (library builds),
 - "quick": the middle two minutes plus the outro (a track on air right now,
   a dropped file or a mic clip, where speed matters),
-- "edges": intro and outro only (tracks analysed before those existed).
+- "edges": intro and outro only (tracks analysed before those existed),
+- "moods": the mood/theme labels only (likewise).
 
 Essentia and TensorFlow can segfault on malformed files, so the models live in
 a ``spawn`` subprocess (same pattern as ``scripts/ingest_music.py``). A crash
@@ -50,6 +51,9 @@ HEADS = {
     "sad":        ("mood_sad", "sad"),
 }
 GENRE_STEM = "genre_discogs400"
+# Optional multi-label mood/theme head (56 labels incl. dark, deep, energetic,
+# groovy, heavy, space). Used when its files are present in models/.
+MOOD_STEM = "mtg_jamendo_moodtheme"
 
 # Analyse at most this much audio, taken from the middle of the file. Enough to
 # characterise a track, and it caps the cost of hour-long mixes.
@@ -157,6 +161,16 @@ def _worker_loop(effnet_path: str, task_q, result_q):
             graphFilename=_head_path(GENRE_STEM, "pb"),
             input="serving_default_model_Placeholder",
             output="PartitionedCall:0")
+        mood_head, mood_classes = None, []
+        if os.path.exists(_head_path(MOOD_STEM, "pb")) and os.path.exists(_head_path(MOOD_STEM, "json")):
+            meta = json.load(open(_head_path(MOOD_STEM, "json")))
+            mood_classes = meta["classes"]
+            schema = meta.get("schema", {})
+            out_name = next((o["name"] for o in schema.get("outputs", [])
+                             if o.get("output_purpose") == "predictions"), "model/Sigmoid")
+            in_name = (schema.get("inputs") or [{}])[0].get("name", "model/Placeholder")
+            mood_head = es.TensorflowPredict2D(graphFilename=_head_path(MOOD_STEM, "pb"),
+                                               input=in_name, output=out_name)
         backbone(np.zeros(5 * EMB_SR, dtype=np.float32))  # warm-up
         result_q.put(("ready", None))
     except Exception as exc:  # pragma: no cover - startup failure path
@@ -190,6 +204,22 @@ def _worker_loop(effnet_path: str, task_q, result_q):
                     return None
                 p = np.array(backbone(a))
                 return p if p.ndim == 2 and np.isfinite(p).all() else None
+
+            def moods_of(patches):
+                if mood_head is None:
+                    return None
+                m = np.array(mood_head(patches)).mean(axis=0)
+                return {c: round(float(v), 4) for c, v in zip(mood_classes, m)}
+
+            if mode == "moods":
+                # Only the mood/theme labels (tracks analysed before the
+                # mood model was added).
+                patches = embed(max(0.0, (duration - MAX_SECONDS) / 2), MAX_SECONDS)
+                if patches is None:
+                    result_q.put(("error", "couldn't embed the audio"))
+                else:
+                    result_q.put(("ok", {"moods": moods_of(patches)}))
+                continue
 
             # Intro and outro: how the track starts and ends, for judging how
             # this track's outro sits against another's intro. "quick" (a track
@@ -227,6 +257,7 @@ def _worker_loop(effnet_path: str, task_q, result_q):
                 "emb": emb.astype(np.float32).tolist(),
                 "heads": head_out,
                 "genres": genres,
+                "moods": moods_of(patches),
                 **edges,
             }
             if want_rhythm:
