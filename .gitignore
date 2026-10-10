@@ -31,3 +31,6 @@ scripts/bpm_map.json
 scripts/energy_by_path.json
 scripts/calib_set.json
 scripts/mixing_*.json
+
+# Separate environment for the text-audio model bake-off (PyTorch, MuQ, CLAP)
+.venv-ml/

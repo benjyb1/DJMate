@@ -2,7 +2,7 @@
 
 A rekordbox companion. It watches what rekordbox is playing and shows a compass
 around it: one track per direction (more energy, darker, faster, more vocal,
-more electronic, bring it down, slower, closest blend), each one mixable from
+deeper, bring it down, slower, closest blend), each one mixable from
 where you are.
 
 It's what DJMate opens to. The older Supabase-backed app (sign-in, 3D map,
@@ -15,8 +15,8 @@ playlists, tagging) is switched off for now; its code is still in the repo.
    and the Essentia heads. Store the result in
    `~/Library/Application Support/DJMate/next-track/`. Re-runs only touch new or
    changed files.
-2. **Direction engine.** Turn the head scores into four axes (energy,
-   darkness, vocals, electronic), rank every track against the library so
+2. **Direction engine.** Turn the head scores into axes (energy, darkness,
+   vocals, depth), rank every track against the library so
    "darker" is relative to your music, then pick the closest mixable track that
    moves along each axis.
 3. **Now playing.** Read rekordbox's play history (`djmdSongHistory`). The
@@ -41,10 +41,10 @@ Each direction then scores what's left:
 
 | Direction | Axis | Rule |
 |---|---|---|
-| More energy / Bring it down | energy | Your rekordbox star rating where you've rated, else a ridge fit of party, aggressive and relaxed heads + BPM to those ratings |
-| Darker | dark | low *happy*, plus *sad*, *aggressive* and minor key |
+| More energy / Bring it down | energy | Your 1-10 hand rating where there is one, else a ridge fit of the seven heads + BPM to those ratings (cross-validated r ≈ 0.6) |
+| Darker | dark | low *happy*, plus *sad*, *aggressive* and minor key, blended with the mood/theme model's *dark* (provisional, untested) |
 | More vocal | vocal | *voice* head (voice vs instrumental) |
-| More electronic | electronic | *mood_electronic* head |
+| Deeper / More driving | deep | classifier trained on your Discogs styles (Deep House, Deep Techno, Dub Techno) over the EffNet fingerprint |
 | Faster / Slower | BPM | +/−1.5 to 10 BPM, at most 9% |
 | Closest blend | none | nearest by embedding |
 
@@ -77,7 +77,12 @@ October 2026 results (1,061 tracks; 50 recent transitions, 16 clean):
 | Settings | On screen | Top 3 | Harmonic picks |
 |---|---|---|---|
 | Whole-track similarity only | 25% | 19% | 88% |
-| + outro→intro fit (current) | 38% | 31% | 89% |
+| + outro→intro fit | 38% | 31% | 89% |
+| "Deeper" in place of "More electronic" (current) | 31% | 25% | 90% |
+
+"More electronic" was dropped because its head scores ~1.0 for almost every
+track, so the card behaved like a second closest blend. The one transition
+it caught that "Deeper" doesn't is a move with no change in depth.
 
 Crate affinity (a classifier predicting which Mixing crate a track sounds
 like, out-of-fold) was tried and added nothing on top, so it's in the code
@@ -87,6 +92,29 @@ verdict. Re-run the script as more sets are logged.
 Of the 50 recent transitions, 30 clash keys on the Camelot wheel. Worth
 knowing if harmonic mixing matters to you, though rekordbox's key detection
 on percussive minimal isn't always reliable.
+
+## Tags and fingerprints (October 2026)
+
+`scripts/bakeoff_embeddings.py` scores fingerprints against Discogs styles
+(`scripts/fetch_discogs_tags.py`, 713 of 1,061 tracks matched, 559 with
+confident styles). A classifier per fingerprint, 5-fold, three seeds,
+macro ROC-AUC over 16 styles:
+
+| Fingerprint | Style AUC | Top style right | "Deep" AUC |
+|---|---|---|---|
+| EffNet (current) | 0.765 | 55% | 0.74-0.76 |
+| EffNet + intro/outro | 0.775 | 56% | 0.75 |
+| EffNet + MuQ-MuLan | 0.772 | 56% | 0.77 |
+| MuQ-MuLan alone | 0.728 | 44% | 0.75 |
+| Jamendo mood/theme (56 labels) | 0.727 | 40% | 0.71 |
+| MuQ zero-shot ("<style> music", no training) | 0.607 | 20% | 0.64 |
+| Mood/theme "deep" label as is | | | 0.70 |
+
+EffNet stays. MuQ-MuLan adds little and would cost a 4 GB PyTorch model,
+2 s a track and a non-commercial licence; its zero-shot tagging is weak on
+club music. CLAP (`laion/larger_clap_music`) couldn't be tested: the
+checkpoint on Hugging Face is untrained. Dark and vocal have no Discogs
+answer key, so they need hand spot-checks.
 
 ## Running it
 

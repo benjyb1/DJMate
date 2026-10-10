@@ -65,7 +65,7 @@ class FakeIndex:
             }
         X = rng.normal(size=(n, 16))
         self.Xn = X / np.linalg.norm(X, axis=1, keepdims=True)
-        self.axis_pct = {a: rng.random(n) for a in ("energy", "dark", "vocal", "electronic")}
+        self.axis_pct = {a: rng.random(n) for a in ("energy", "dark", "vocal", "deep", "electronic")}
         self._extra = extra or {}
 
     def features_for(self, tid):
@@ -122,7 +122,7 @@ class EngineTests(unittest.TestCase):
     def test_axis_directions_move_along_their_axis(self):
         res = engine.suggest(self.idx, self.start)
         for d in res["directions"]:
-            if d["id"] in ("energy_up", "darker", "vocal", "electronic", "energy_down"):
+            if d["id"] in ("energy_up", "darker", "vocal", "deeper", "energy_down"):
                 for t in d["tracks"]:
                     self.assertGreater(t["shift"], 0, d["id"])
 
@@ -167,6 +167,36 @@ class RuleFilterTests(unittest.TestCase):
         self.assertFalse(follows_rules(idx, a, c))
         idx.entries[b]["bpm"] = 140.0                     # tempo jump
         self.assertFalse(follows_rules(idx, a, b))
+
+
+class DeepAxisTests(unittest.TestCase):
+    """The "deep" axis is learnt from Discogs styles over the fingerprint."""
+
+    def make(self, n_deep, n_other, n_unlabelled=20, seed=0):
+        from backend.next_track.index import LibraryIndex
+        rng = np.random.default_rng(seed)
+        idx = LibraryIndex.__new__(LibraryIndex)
+        n = n_deep + n_other + n_unlabelled
+        ids = [f"t{i}" for i in range(n)]
+        Z = rng.normal(size=(n, 32))
+        Z[:n_deep, 0] += 3.0                     # deep tracks share a direction
+        styles = {t: {"Deep House"} for t in ids[:n_deep]}
+        styles.update({t: {"Techno"} for t in ids[n_deep:n_deep + n_other]})
+        idx._discogs_styles = lambda: styles
+        idx._mu, idx._sd = np.zeros(64), np.ones(64)
+        return idx, ids, Z
+
+    def test_deep_tracks_score_higher(self):
+        idx, ids, Z = self.make(40, 60)
+        v = idx._derive_deep(ids, Z)
+        self.assertGreater(v[:40].mean(), v[40:100].mean() + 1.0)
+        # a track outside the library is scored by the same model
+        self.assertEqual(idx._deep_score(np.concatenate([Z[0], Z[0]])).shape, (1,))
+
+    def test_too_few_examples_falls_back(self):
+        idx, ids, Z = self.make(10, 60)
+        self.assertIsNone(idx._derive_deep(ids, Z))
+        self.assertIsNone(idx._deep_score(np.zeros(64)))
 
 
 if __name__ == "__main__":

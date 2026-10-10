@@ -39,7 +39,7 @@ from .index import LibraryIndex
 class Direction:
     id: str
     label: str
-    axis: str            # 'energy' | 'dark' | 'vocal' | 'electronic' | 'bpm' | 'similar'
+    axis: str            # 'energy' | 'dark' | 'vocal' | 'deep' | 'electronic' | 'bpm' | 'similar'
     sign: int = 1
 
 
@@ -54,18 +54,23 @@ DIRECTIONS = {
         Direction("lighter", "Lighter", "dark", -1),
         Direction("vocal", "More vocal", "vocal", +1),
         Direction("instrumental", "Instrumental", "vocal", -1),
+        Direction("deeper", "Deeper", "deep", +1),
+        Direction("driving", "More driving", "deep", -1),
         Direction("electronic", "More electronic", "electronic", +1),
         Direction("organic", "More organic", "electronic", -1),
     ]
 }
 
-DEFAULT_DIRECTIONS = ["energy_up", "darker", "faster", "electronic",
+# "Deeper" replaced "More electronic" here: the electronic head says ~1.0
+# for nearly every track in a dance library, so it never pointed anywhere.
+DEFAULT_DIRECTIONS = ["energy_up", "darker", "faster", "deeper",
                       "energy_down", "slower", "vocal", "closest"]
 
 # Assignment order: the most distinctive pushes pick first, "closest" last so
 # it doesn't steal the obvious neighbour from a direction that needed it.
 _PRIORITY = ["energy_up", "energy_down", "faster", "slower", "darker", "lighter",
-             "vocal", "instrumental", "electronic", "organic", "closest"]
+             "vocal", "instrumental", "deeper", "driving", "electronic", "organic",
+             "closest"]
 
 
 @dataclass(frozen=True)
@@ -321,6 +326,8 @@ _EXTREMES = {
     ("dark", -1): "Already one of your lightest",
     ("vocal", 1): "Already one of your most vocal",
     ("vocal", -1): "Already about as instrumental as it gets",
+    ("deep", 1): "Already one of your deepest",
+    ("deep", -1): "Already one of your most driving",
     ("electronic", 1): "Already one of your most electronic",
     ("electronic", -1): "Already one of your most organic",
 }
@@ -340,7 +347,8 @@ def _reasons(d: Direction, ctx: Context, r: int) -> list[str]:
     """Short chips explaining a pick, most relevant to the direction first."""
     e, cur, feats, pct = ctx.ents[r], ctx.cur, ctx.feats, ctx.pct
     words = {"energy": ("energy", "calmer"), "dark": ("darker", "lighter"),
-             "vocal": ("vocal", "less vocal"), "electronic": ("electronic", "organic")}
+             "vocal": ("vocal", "less vocal"), "deep": ("deeper", "driving"),
+             "electronic": ("electronic", "organic")}
     axis_chip = None
     if d.axis in words:
         delta = pct[d.axis][r] - feats["pct"][d.axis]

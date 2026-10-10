@@ -18,6 +18,8 @@ export const ICONS = {
   organic: (p) => <Svg {...p}><path d="M11 20A7 7 0 0 1 4 13c0-6 7-10 16-10 0 9-4 16-9 17z" /><path d="M4 21c4-4 7-7 10-10" /></Svg>,
   vocal: (p) => <Svg {...p}><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></Svg>,
   instrumental: (p) => <Svg {...p}><path d="M3 12h2l2-5 3 10 3-14 3 12 2-3h3" /></Svg>,
+  deeper: (p) => <Svg {...p}><path d="M3 6c3-2 6 2 9 0s6-2 9 0M3 12c3-2 6 2 9 0s6-2 9 0M3 18c3-2 6 2 9 0s6-2 9 0" /></Svg>,
+  driving: (p) => <Svg {...p}><path d="M3 12h11M10 6l6 6-6 6M19 6v12" /></Svg>,
   closest: (p) => <Svg {...p}><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1.2" /></Svg>,
 };
 
@@ -26,6 +28,8 @@ export const DIRECTION_META = {
   energy_up:    { color: '#a855f7', row: 1, col: 2, blurb: 'Lift the room' },
   darker:       { color: '#818cf8', row: 1, col: 3, blurb: 'Moodier, minor, heavier' },
   faster:       { color: '#00d4ff', row: 2, col: 3, blurb: 'Push the tempo' },
+  deeper:       { color: '#2dd4bf', row: 3, col: 3, blurb: 'Dubbier, warmer, rolling' },
+  driving:      { color: '#5eead4', row: 3, col: 3, blurb: 'Punchier, straighter' },
   electronic:   { color: '#2dd4bf', row: 3, col: 3, blurb: 'More machines' },
   energy_down:  { color: '#60a5fa', row: 3, col: 2, blurb: 'Let it breathe' },
   closest:      { color: '#cbd5e1', row: 3, col: 1, blurb: 'The safest blend' },

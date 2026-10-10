@@ -45,7 +45,13 @@ MIN_TRACK_SECONDS = 60
 # wrong top-1 (margin 0.03) out.
 ID_MIN_MATCH = 0.45
 ID_MIN_MARGIN = 0.08
-AXES = ("energy", "dark", "vocal", "electronic")
+AXES = ("energy", "dark", "vocal", "electronic", "deep")
+# The "deep" axis is learnt from Discogs: tracks whose release is filed under
+# any of these styles (scripts/fetch_discogs_tags.py) teach a classifier over
+# the EffNet fingerprint. Only confident Discogs matches are used.
+DEEP_STYLES = frozenset({"Deep House", "Deep Techno", "Dub Techno"})
+DISCOGS_MIN_CONFIDENCE = 0.75
+DEEP_MIN_EXAMPLES = 25   # of each class, or the axis falls back
 
 
 def track_id(path: str) -> str:
@@ -55,6 +61,18 @@ def track_id(path: str) -> str:
 def _logit(p, eps: float = 1e-4):
     p = np.clip(np.asarray(p, dtype=np.float64), eps, 1 - eps)
     return np.log(p / (1 - p))
+
+
+def _mood_model_present() -> bool:
+    return (paths.models_dir() / "mtg_jamendo_moodtheme-discogs-effnet-1.pb").is_file()
+
+
+def _head_row(e: dict) -> dict:
+    """Head probabilities plus mood/theme labels (prefixed m_) for one track."""
+    row = dict(e.get("heads") or {})
+    for k, v in (e.get("moods") or {}).items():
+        row[f"m_{k}"] = v
+    return row
 
 
 def _is_bundled(path: str) -> bool:
@@ -111,6 +129,7 @@ class LibraryIndex:
         self.IntroN = np.zeros((0, 0), dtype=np.float32)
         self.CrateP = None
         self._crate_model = None
+        self._deep_model = None
         self._has_edges = np.zeros(0, dtype=bool)
         self._edge_mu = None
         self._edge_sd = None
@@ -123,6 +142,7 @@ class LibraryIndex:
         self._energy_model: Optional[dict] = None
         self._row_of: dict[str, int] = {}
         self._loaded_mtime: Optional[float] = None
+        self._hand_cache: Optional[dict[str, float]] = None
         self.load()
 
     # ── persistence ─────────────────────────────────────────────────────────
@@ -262,6 +282,8 @@ class LibraryIndex:
             return "full"
         if row["id"] not in self._outro:
             return "edges"
+        if _mood_model_present() and not old.get("moods"):
+            return "moods"
         return None
 
     def _build(self):
@@ -340,6 +362,9 @@ class LibraryIndex:
                         e["error"] = "analysis failed"
                     elif mode == "edges":
                         self._apply_edges(e["id"], res)
+                    elif mode == "moods":
+                        if res.get("moods"):
+                            e["moods"] = res["moods"]
                     else:
                         self._apply_analysis(e, res)
                     st["done"] += 1
@@ -360,6 +385,8 @@ class LibraryIndex:
     def _apply_analysis(self, e: dict, res: dict):
         e["heads"] = res["heads"]
         e["genres"] = res["genres"]
+        if res.get("moods"):
+            e["moods"] = res["moods"]
         e.pop("error", None)
         if res.get("duration") and not e.get("duration"):
             e["duration"] = res["duration"]
@@ -380,7 +407,8 @@ class LibraryIndex:
 
     # ── derived arrays ──────────────────────────────────────────────────────
     def _raw_axes(self, heads_rows: list[dict], camelots: list, bpms: np.ndarray,
-                  ratings: np.ndarray, fit: bool) -> dict[str, np.ndarray]:
+                  ratings: np.ndarray, fit: bool,
+                  deep: Optional[np.ndarray] = None) -> dict[str, np.ndarray]:
         """Turn head probabilities into raw (unnormalised) axis values."""
         L = {h: _logit([r.get(h, 0.5) for r in heads_rows])
              for h in ("party", "aggressive", "relaxed", "electronic", "voice",
@@ -397,29 +425,55 @@ class LibraryIndex:
         minor = np.array([{True: 1.0, False: -1.0, None: 0.0}[keys.is_minor(c)]
                           for c in camelots])
         dark = -z["happy"] + 0.5 * z["sad"] + 0.5 * z["aggressive"] + 0.3 * minor
+        # The mood/theme model has real "dark" and "deep" labels. Where it's
+        # been run, blend its "dark" in (provisional weights until there's a
+        # spot-check set to tune against) and use its "deep" as its own axis.
+        md = _logit([r.get("m_dark", 0.5) for r in heads_rows])
+        mdeep = _logit([r.get("m_deep", 0.5) for r in heads_rows])
+        if fit:
+            self._mood_stats = {"dark": (float(md.mean()), float(md.std() or 1.0)),
+                                "deep": (float(mdeep.mean()), float(mdeep.std() or 1.0)),
+                                "olddark": (float(dark.mean()), float(dark.std() or 1.0))}
+        ms = self._mood_stats
+        has_moods = np.array(["m_dark" in r for r in heads_rows])
+        z_old = (dark - ms["olddark"][0]) / ms["olddark"][1]
+        z_md = (md - ms["dark"][0]) / ms["dark"][1]
+        dark = np.where(has_moods, 0.6 * z_md + 0.4 * z_old, z_old)
+        if deep is None:
+            # No Discogs-trained model: the mood/theme "deep" label is the
+            # fallback (it ranks Discogs' deep records far worse).
+            deep = np.where(has_moods, (mdeep - ms["deep"][0]) / ms["deep"][1], 0.0)
 
-        F = np.column_stack([z["party"], z["aggressive"], z["relaxed"], zb])
+        # Energy on your 1-10 scale. Trained on your own hand ratings, not the
+        # rekordbox stars: those were written by the old DJMate energy model
+        # from these same mood scores, so fitting to them just copies it.
+        # Against the hand ratings, all seven heads + BPM cross-validate at
+        # r = 0.59 (the stars-fitted model managed 0.51).
+        F = np.column_stack([z[h] for h in ("party", "aggressive", "relaxed",
+                                            "electronic", "voice", "happy", "sad")] + [zb])
         if fit:
             rated = ratings > 0
             if rated.sum() >= 25:
                 A = np.column_stack([np.ones(rated.sum()), F[rated]])
-                # Light ridge so a few hundred ratings can't overfit four features.
-                lam = 1.0
+                lam = 3.0
                 coef = np.linalg.solve(A.T @ A + lam * np.eye(A.shape[1]),
                                        A.T @ ratings[rated])
                 pred = np.column_stack([np.ones(len(F)), F]) @ coef
                 corr = float(np.corrcoef(pred[rated], ratings[rated])[0, 1])
                 self._energy_model = {"coef": coef.tolist(), "n": int(rated.sum()),
-                                      "corr": round(corr, 3), "fitted": True}
+                                      "corr": round(corr, 3), "fitted": True,
+                                      "source": "hand ratings (1-10)"}
             else:
-                # Same blend as scripts/compute_effnet_energy.py, mapped to 1-5.
-                self._energy_model = {"coef": [3.0, 0.45, 0.4, -0.3, 0.1],
+                # Same blend as scripts/compute_effnet_energy.py, on 1-10.
+                self._energy_model = {"coef": [6.0, 0.9, 0.8, -0.6, 0, 0, 0, 0, 0.2],
                                       "n": int(rated.sum()), "fitted": False}
         coef = np.asarray(self._energy_model["coef"])
-        pred = np.clip(np.column_stack([np.ones(len(F)), F]) @ coef, 1, 5)
-        energy = np.where(ratings > 0, ratings + 0.25 * (pred - 3), pred)
+        pred = np.clip(np.column_stack([np.ones(len(F)), F]) @ coef, 1, 10)
+        # Where you've rated a track by hand, your rating wins; the model only
+        # breaks ties between tracks you gave the same number.
+        energy = np.clip(np.where(ratings > 0, ratings + 0.25 * (pred - 5.5) / 4.5, pred), 1, 10)
         return {"energy": energy, "energy_pred": pred, "dark": dark,
-                "vocal": L["voice"], "electronic": L["electronic"]}
+                "vocal": L["voice"], "electronic": L["electronic"], "deep": deep}
 
     def _derive(self):
         ids = [i for i in self.entries
@@ -445,9 +499,10 @@ class LibraryIndex:
 
         ents = [self.entries[i] for i in ids]
         bpms = np.array([e.get("bpm") or np.nan for e in ents], dtype=np.float64)
-        ratings = np.array([e.get("rating") or 0 for e in ents], dtype=np.float64)
-        vals = self._raw_axes([e["heads"] for e in ents], [e.get("camelot") for e in ents],
-                              bpms, ratings, fit=True)
+        hand = self._hand_energy()
+        ratings = np.array([hand.get(i, 0.0) for i in ids], dtype=np.float64)
+        vals = self._raw_axes([_head_row(e) for e in ents], [e.get("camelot") for e in ents],
+                              bpms, ratings, fit=True, deep=self._derive_deep(ids, Zm))
         self.axis_vals = vals
         self.axis_pct, self._axis_sorted = {}, {}
         n = len(ids)
@@ -458,7 +513,8 @@ class LibraryIndex:
             self.axis_pct[a] = pct
             self._axis_sorted[a] = np.sort(vals[a])
         for r, e in enumerate(ents):
-            e["energy"] = round(float(vals["energy"][r]), 2)
+            # The UI draws energy as five bars, so store it on a 0-5 scale.
+            e["energy"] = round(float(vals["energy"][r]) / 2, 2)
         self._derive_edges(ids)
         self._derive_crates(ents)
 
@@ -508,6 +564,70 @@ class LibraryIndex:
         self._crate_model = (pca, full)
         self._crate_names = keep
 
+    def _discogs_styles(self) -> dict[str, set]:
+        """Confident Discogs styles by track id, from discogs.json."""
+        try:
+            raw = json.loads((paths.data_dir() / "discogs.json").read_text())
+        except (OSError, ValueError):
+            return {}
+        return {tid: set(v["styles"]) for tid, v in raw.items()
+                if v.get("status") == "ok" and v.get("styles")
+                and v.get("confidence", 0) >= DISCOGS_MIN_CONFIDENCE}
+
+    def _derive_deep(self, ids: list[str], Zm: np.ndarray) -> Optional[np.ndarray]:
+        """How deep each track is, as a classifier score (log-odds) trained on
+        Discogs styles over the EffNet fingerprint (standardised mean
+        activations, ``Zm``).
+
+        Chosen with scripts/bakeoff_embeddings.py (October 2026, 559 tracks
+        with confident Discogs styles, 164 of them deep): at ranking Discogs'
+        Deep House / Deep Techno / Dub Techno records first this scores
+        ROC-AUC about 0.75 (0.73-0.77 across fold splits), against 0.70 for
+        the mood/theme model's "deep" label.
+        Adding MuQ-MuLan only reached 0.77, not worth a 4 GB PyTorch model.
+
+        Tracks with a Discogs answer get out-of-fold scores, so a track's own
+        label never feeds its own value; the rest use the model fitted on all
+        of them. Returns None (fall back) if there are too few examples."""
+        self._deep_model = None
+        try:
+            from sklearn.decomposition import PCA
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.model_selection import StratifiedKFold
+        except ImportError:
+            return None
+        styles = self._discogs_styles()
+        labelled = np.array([i in styles for i in ids])
+        y = np.array([bool(DEEP_STYLES & styles.get(i, set())) for i in ids], dtype=int)
+        n_pos = int(y[labelled].sum())
+        if min(n_pos, int(labelled.sum()) - n_pos) < DEEP_MIN_EXAMPLES:
+            return None
+        pca = PCA(n_components=min(128, Zm.shape[1], len(ids) - 1), random_state=0)
+        F = pca.fit_transform(Zm)
+
+        def model():
+            return LogisticRegression(C=0.01, max_iter=2000, class_weight="balanced")
+
+        out = np.zeros(len(ids))
+        Fl, yl = F[labelled], y[labelled]
+        idx_l = np.where(labelled)[0]
+        for tr, te in StratifiedKFold(5, shuffle=True, random_state=0).split(Fl, yl):
+            out[idx_l[te]] = model().fit(Fl[tr], yl[tr]).decision_function(Fl[te])
+        full = model().fit(Fl, yl)
+        if (~labelled).any():
+            out[~labelled] = full.decision_function(F[~labelled])
+        self._deep_model = (pca, full)
+        return out
+
+    def _deep_score(self, emb: np.ndarray) -> Optional[np.ndarray]:
+        """Deep score for a track outside the library, from its raw embedding."""
+        if self._deep_model is None:
+            return None
+        pca, full = self._deep_model
+        half = len(emb) // 2
+        zm = (emb[:half] - self._mu[:half]) / self._sd[:half]
+        return full.decision_function(pca.transform(zm[None, :]))
+
     def _crate_vec(self, tid: str) -> Optional[np.ndarray]:
         if self.CrateP is None:
             return None
@@ -519,6 +639,28 @@ class LibraryIndex:
         pca, full = self._crate_model
         p = full.predict_proba(pca.transform(feats["vec"][None, :]))[0]
         return p / (np.linalg.norm(p) + 1e-9)
+
+    def _hand_energy(self) -> dict[str, float]:
+        """Your own 1-10 energy ratings, by track id. Kept in
+        scripts/calib_set.json (the surviving copy of the DJMate ratings) and,
+        for new ones, energy_labels.json in the index folder."""
+        if self._hand_cache is not None:
+            return self._hand_cache
+        out: dict[str, float] = {}
+        sources = [paths.REPO_ROOT / "scripts" / "calib_set.json"]
+        main = paths._main_checkout(paths.REPO_ROOT)
+        if main:
+            sources.append(main / "scripts" / "calib_set.json")
+        sources.append(paths.data_dir() / "energy_labels.json")
+        for src in sources:
+            try:
+                for row in json.loads(src.read_text()):
+                    if row.get("filepath") and row.get("energy"):
+                        out[track_id(row["filepath"])] = float(row["energy"])
+            except (OSError, ValueError, TypeError):
+                continue
+        self._hand_cache = out
+        return out
 
     def _derive_edges(self, ids: list[str]):
         """Standardised intro matrix, so a track's outro can be compared with
@@ -569,12 +711,13 @@ class LibraryIndex:
         z = (emb - self._mu) / self._sd
         vec = z / (np.linalg.norm(z) + 1e-9)
         bpm = np.array([e.get("bpm") or np.nan])
-        vals = self._raw_axes([e["heads"]], [e.get("camelot")], bpm,
-                              np.array([float(e.get("rating") or 0)]), fit=False)
+        vals = self._raw_axes([_head_row(e)], [e.get("camelot")], bpm,
+                              np.array([float(e.get("rating") or 0)]), fit=False,
+                              deep=self._deep_score(emb))
         axes = {a: float(vals[a][0]) for a in AXES}
         pct = {a: float(np.searchsorted(self._axis_sorted[a], axes[a]) /
                         max(len(self._axis_sorted[a]) - 1, 1)) for a in AXES}
-        e["energy"] = round(axes["energy"], 2)
+        e["energy"] = round(axes["energy"] / 2, 2)
         return {"vec": vec.astype(np.float32), "axes": axes,
                 "pct": {a: min(1.0, v) for a, v in pct.items()}, "row": None}
 
@@ -640,6 +783,8 @@ class LibraryIndex:
         e["source"] = meta.get("source", "external")
         e["heads"] = res["heads"]
         e["genres"] = res["genres"]
+        if res.get("moods"):
+            e["moods"] = res["moods"]
         if not e.get("bpm") and res.get("bpm"):
             e["bpm"], e["bpm_estimated"] = res["bpm"], True
         if not e.get("camelot"):
