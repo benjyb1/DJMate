@@ -46,7 +46,18 @@ work. This note covers the in-progress tagging work.
 - `scripts/embed_text_audio.py`: embeds the library with MuQ-MuLan or CLAP
   (3 x 10 s clips per track) plus a word vocabulary, into `emb_<model>.npz`.
 
-## In progress when handed off
+## Update, 10 October 2026
+
+- Discogs lookup finished (713/1,061 matched); mood pass finished (1,076).
+- CLAP is unusable (the Hugging Face checkpoint is untrained). MuQ-MuLan
+  works with `transformers<5`; the whole library is in `emb_muq.npz`.
+- Bake-off result (table in `docs/next-track.md`): EffNet stays.
+- "Deeper / More driving" replaced "More electronic" on the compass, on a
+  Discogs-trained classifier (ROC-AUC ~0.75 vs 0.70 for the Jamendo head).
+- Fixed a memory leak in `LibraryIndex.load` (each reload kept ~1.4 GB).
+- Next: ~50 hand spot-checks for dark, deep and vocal.
+
+## In progress when handed off (earlier)
 
 1. `fetch_discogs_tags.py` **finished**: 713 of 1,061 tracks matched
    (`discogs.json`). Re-run with `--retry-missing` only if matching improves.

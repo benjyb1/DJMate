@@ -77,7 +77,7 @@ const AXIS_LABELS = [
   ['energy', 'Energy', '#a855f7'],
   ['dark', 'Dark', '#818cf8'],
   ['vocal', 'Vocal', '#c084fc'],
-  ['electronic', 'Electronic', '#2dd4bf'],
+  ['deep', 'Deep', '#2dd4bf'],
 ];
 
 /** Where this track sits in your library on each axis (percentiles). */

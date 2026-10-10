@@ -5,7 +5,10 @@ These models put music and words in the same space, so a phrase like
 "dark rolling dub techno" can be scored against any track. Two candidates:
 
   muq   MuQ-MuLan large (Tencent, CC BY-NC 4.0), 24 kHz audio
-  clap  LAION CLAP trained on music (Apache-2.0), 48 kHz audio
+  clap  LAION CLAP trained on music (Apache-2.0), 48 kHz audio. Not usable:
+        the laion/larger_clap_music checkpoint on Hugging Face is untrained
+        (every bias is zero, weights at their 0.02 init spread), so all text
+        embeddings come out identical. Checked October 2026.
 
 Each track is summarised by three 10-second clips (25%, 50%, 75% of the way
 through), embedded and averaged. Also embeds a vocabulary of words (Discogs
@@ -38,6 +41,8 @@ WORDS = [
     "techno", "house", "deep house", "tech house", "minimal", "minimal techno",
     "dub techno", "acid", "acid house", "electro", "breakbeat", "uk garage",
     "downtempo", "ambient", "drum and bass", "jungle", "disco", "trance",
+    "progressive house", "breaks", "leftfield", "idm", "experimental", "dub",
+    "nu-disco", "deep techno", "bass music",
     # descriptive words for dials
     "dark", "deep", "hypnotic", "energetic", "melodic", "vocal", "instrumental",
     "dubby", "rolling", "groovy", "uplifting", "aggressive", "minimal and stripped back",
@@ -80,7 +85,7 @@ class Muq:
 
     def text(self, words):
         with self.torch.no_grad():
-            return self.m(texts=words).float().cpu().numpy()
+            return self.m(texts=[f"{w} music" for w in words]).float().cpu().numpy()
 
 
 def _vec(out):
