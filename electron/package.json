@@ -1,0 +1,52 @@
+{
+  "name": "djmate-desktop",
+  "version": "1.0.0",
+  "description": "Needle (DJMate) desktop app for macOS \u2014 wraps the frontend and spawns the local backend.",
+  "main": "main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build:frontend": "npm --prefix ../Frontend install && npm --prefix ../Frontend run build",
+    "dist": "npm run build:frontend && node write-repo-root.cjs && electron-builder --mac dir"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.djmate.needle",
+    "productName": "Needle",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "static-server.cjs",
+      "paths.cjs",
+      "package.json",
+      "assets/**",
+      "repo-root.json"
+    ],
+    "mac": {
+      "category": "public.app-category.music",
+      "icon": "assets/icon.icns",
+      "target": [
+        "dir"
+      ],
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "extraResources": [
+      {
+        "from": "../Frontend/dist",
+        "to": "frontend"
+      }
+    ],
+    "electronLanguages": [
+      "en",
+      "en-GB"
+    ]
+  }
+}

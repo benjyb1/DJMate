@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1d1340"/>
+      <stop offset="0.55" stop-color="#0c0a1c"/>
+      <stop offset="1" stop-color="#05050b"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#7c3aed" stop-opacity="0.55"/>
+      <stop offset="0.6" stop-color="#7c3aed" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#7c3aed" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="disc" cx="45%" cy="40%" r="62%">
+      <stop offset="0" stop-color="#22223a"/>
+      <stop offset="1" stop-color="#08080f"/>
+    </radialGradient>
+    <linearGradient id="label" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a855f7"/>
+      <stop offset="1" stop-color="#00d4ff"/>
+    </linearGradient>
+    <linearGradient id="north" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#00d4ff"/>
+      <stop offset="1" stop-color="#ecfbff"/>
+    </linearGradient>
+    <linearGradient id="south" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a855f7"/>
+      <stop offset="1" stop-color="#4c1d95"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.13"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="16"/></filter>
+    <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="186"/></clipPath>
+    <clipPath id="discclip"><circle cx="512" cy="512" r="300"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#sq)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+    <circle cx="512" cy="512" r="420" fill="url(#halo)"/>
+    <rect x="100" y="100" width="824" height="824" rx="186" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="3"/>
+  </g>
+
+  <!-- the record -->
+  <circle cx="512" cy="512" r="300" fill="url(#disc)"/>
+  <g>
+    <circle cx="512" cy="512" r="146" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="2"/>
+    <circle cx="512" cy="512" r="158" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="2"/>
+    <circle cx="512" cy="512" r="170" fill="none" stroke="#ffffff" stroke-opacity="0.065" stroke-width="2"/>
+    <circle cx="512" cy="512" r="182" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="2"/>
+    <circle cx="512" cy="512" r="194" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="2"/>
+    <circle cx="512" cy="512" r="206" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="2"/>
+    <circle cx="512" cy="512" r="218" fill="none" stroke="#ffffff" stroke-opacity="0.065" stroke-width="2"/>
+    <circle cx="512" cy="512" r="230" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="2"/>
+    <circle cx="512" cy="512" r="242" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="2"/>
+    <circle cx="512" cy="512" r="254" fill="none" stroke="#ffffff" stroke-opacity="0.065" stroke-width="2"/>
+    <circle cx="512" cy="512" r="266" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="2"/>
+    <circle cx="512" cy="512" r="278" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="2"/>
+  </g>
+  <g clip-path="url(#discclip)">
+    <path d="M512 512 L 300 212 A 368 368 0 0 1 712 212 Z" fill="url(#sheen)" transform="rotate(-28 512 512)"/>
+  </g>
+  <circle cx="512" cy="512" r="300" fill="none" stroke="#3b2a6b" stroke-width="3"/>
+  <circle cx="512" cy="512" r="112" fill="url(#label)"/>
+  <circle cx="512" cy="512" r="112" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="2"/>
+
+  <!-- the compass needle -->
+  <g transform="rotate(35 512 512)">
+    <polygon points="512,168 552,512 472,512" fill="#00d4ff" opacity="0.75" filter="url(#blur)"/>
+    <polygon points="512,168 552,512 472,512" fill="url(#north)"/>
+    <polygon points="472,512 552,512 512,856" fill="url(#south)"/>
+    <polygon points="512,168 552,512 512,512" fill="#000000" opacity="0.12"/>
+    <polygon points="512,512 552,512 512,856" fill="#000000" opacity="0.18"/>
+  </g>
+  <circle cx="512" cy="512" r="30" fill="#e2e8f0"/>
+  <circle cx="512" cy="512" r="11" fill="#0a0a14"/>
+</svg>
